@@ -74,7 +74,7 @@ func TestTypedErrors(t *testing.T) {
 	}{
 		{
 			name:       "NotFound",
-			err:        trace.NotFound("user %s not found", "abc123"),
+			err:        trace.NotFound(fmt.Sprintf("user %s not found", "abc123")),
 			checkFunc:  trace.IsNotFound,
 			statusCode: http.StatusNotFound,
 		},
@@ -379,7 +379,7 @@ func handleGetUser(userID string) error {
 func serviceGetUser(userID string) (*User, error) {
 	user, err := repoFindUser(userID)
 	if err != nil {
-		return nil, trace.Wrap(err, "service: failed to get user %s", userID)
+		return nil, trace.Wrap(err, fmt.Sprintf("service: failed to get user %s", userID))
 	}
 	return user, nil
 }
@@ -388,7 +388,7 @@ func repoFindUser(userID string) (*User, error) {
 	// Simulate database query
 	err := sql.ErrNoRows
 	if err == sql.ErrNoRows {
-		return nil, trace.WrapNotFound(err, "user %s not found in database", userID)
+		return nil, trace.WrapNotFound(err, fmt.Sprintf("user %s not found in database", userID))
 	}
 	return &User{ID: userID}, nil
 }
@@ -434,7 +434,7 @@ func ExampleWrap() {
 }
 
 func ExampleNotFound() {
-	err := trace.NotFound("user %s not found", "alice")
+	err := trace.NotFound(fmt.Sprintf("user %s not found", "alice"))
 	if trace.IsNotFound(err) {
 		fmt.Println("User not found!")
 	}
