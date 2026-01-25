@@ -74,7 +74,7 @@ func TestTypedErrors(t *testing.T) {
 	}{
 		{
 			name:       "NotFound",
-			err:        trace.NotFound(fmt.Sprintf("user %s not found", "abc123")),
+			err:        trace.NotFound("user %s not found", "abc123"),
 			checkFunc:  trace.IsNotFound,
 			statusCode: http.StatusNotFound,
 		},
@@ -337,6 +337,34 @@ func level3() error {
 	return trace.Wrap(errors.New("root cause"), "level 3")
 }
 
+// Example: Error message with arrow-style newlines
+func TestErrorMessageArrowFormat(t *testing.T) {
+	// Create a layered error
+	rootErr := errors.New("sql: no rows in result set")
+	repoErr := trace.Wrap(rootErr, "user 123 not found in database")
+	serviceErr := trace.Wrap(repoErr, "service: failed to get user 123")
+
+	// Error message should be formatted with arrows and newlines
+	errMsg := serviceErr.Error()
+
+	// Should contain newlines
+	if !strings.Contains(errMsg, "\n") {
+		t.Errorf("error message should contain newlines, got: %s", errMsg)
+	}
+
+	// Should contain arrow separator
+	if !strings.Contains(errMsg, "→") {
+		t.Errorf("error message should contain arrow (→), got: %s", errMsg)
+	}
+
+	// Verify the format: each layer on its own line
+	lines := strings.Split(errMsg, "\n")
+	// At minimum, we should have 3 lines (service, repo, root)
+	if len(lines) < 3 {
+		t.Errorf("expected at least 3 lines, got %d: %s", len(lines), errMsg)
+	}
+}
+
 // Example: User-friendly message
 func TestUserMessage(t *testing.T) {
 	err := trace.Wrap(
@@ -379,7 +407,7 @@ func handleGetUser(userID string) error {
 func serviceGetUser(userID string) (*User, error) {
 	user, err := repoFindUser(userID)
 	if err != nil {
-		return nil, trace.Wrap(err, fmt.Sprintf("service: failed to get user %s", userID))
+		return nil, trace.Wrap(err, "service: failed to get user %s", userID)
 	}
 	return user, nil
 }
@@ -388,7 +416,7 @@ func repoFindUser(userID string) (*User, error) {
 	// Simulate database query
 	err := sql.ErrNoRows
 	if err == sql.ErrNoRows {
-		return nil, trace.WrapNotFound(err, fmt.Sprintf("user %s not found in database", userID))
+		return nil, trace.WrapNotFound(err, "user %s not found in database", userID)
 	}
 	return &User{ID: userID}, nil
 }
@@ -434,7 +462,7 @@ func ExampleWrap() {
 }
 
 func ExampleNotFound() {
-	err := trace.NotFound(fmt.Sprintf("user %s not found", "alice"))
+	err := trace.NotFound("user %s not found", "alice")
 	if trace.IsNotFound(err) {
 		fmt.Println("User not found!")
 	}

@@ -71,7 +71,7 @@ func (e *TraceError) Error() string {
 	if e.Message != "" {
 		b.WriteString(e.Message)
 		if e.Err != nil {
-			b.WriteString(": ")
+			b.WriteString("\n→ ")
 		}
 	}
 
@@ -182,7 +182,7 @@ func Wrap(err error, msgAndArgs ...any) error {
 		te.Frames = append(Frames{frame}, te.Frames...)
 		if msg != "" {
 			if te.Message != "" {
-				te.Message = msg + ": " + te.Message
+				te.Message = msg + "\n→ " + te.Message
 			} else {
 				te.Message = msg
 			}

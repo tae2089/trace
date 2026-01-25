@@ -59,7 +59,8 @@ Output:
 
 ```
 User not found
-[main.go:25 <- main.go:18 <- main.go:12] failed to fetch user user-123: user user-123 does not exist
+[main.go:25 <- main.go:18 <- main.go:12] failed to fetch user user-123
+→ user user-123 does not exist
 Stack trace:
   main.go:25 main.queryDatabase
   main.go:18 main.fetchUser
@@ -295,11 +296,13 @@ statusCode := trace.GetHTTPStatusCode(combined)
 ```go
 // Simple error string
 fmt.Println(err)
-// [repo.go:42 <- service.go:28] failed to fetch user: connection refused
+// [repo.go:42 <- service.go:28] failed to fetch user
+// → connection refused
 
 // Verbose with full stack trace
 fmt.Printf("%+v\n", err)
-// [repo.go:42 <- service.go:28] failed to fetch user: connection refused
+// [repo.go:42 <- service.go:28] failed to fetch user
+// → connection refused
 // Stack trace:
 //   repo.go:42 repo.Query
 //   service.go:28 service.GetUser
@@ -431,6 +434,10 @@ This package is mostly API-compatible with gravitational/trace. Main differences
 ### v1.0.1 (2026-01-25)
 
 - **Fixed**: Printf formatting directive warnings in `http.go` by using explicit `fmt.Sprintf` for formatted messages in `Timeout` and `ConnectionProblem` calls
+
+### v1.0.2 (2026-01-25)
+
+- **Changed**: Error message formatting now uses `\n→ ` separator for better readability of error chains.
 
 ### v1.0.0
 
