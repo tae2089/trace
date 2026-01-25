@@ -426,6 +426,16 @@ This package is mostly API-compatible with gravitational/trace. Main differences
 - Go 1.20+ (for `errors.Join` support in `Aggregate`)
 - Go 1.18+ (for generics)
 
+## Changelog
+
+### v1.0.1 (2026-01-25)
+
+- **Fixed**: Printf formatting directive warnings in `http.go` by using explicit `fmt.Sprintf` for formatted messages in `Timeout` and `ConnectionProblem` calls
+
+### v1.0.0
+
+- Initial release with core error handling features
+
 ## License
 
 Apache 2.0

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 )
@@ -218,9 +219,9 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		// Check for specific error types
 		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, Timeout(err, "request to %s timed out", req.URL.Host)
+			return nil, Timeout(err, fmt.Sprintf("request to %s timed out", req.URL.Host))
 		}
-		return nil, ConnectionProblem(err, "request to %s failed", req.URL.Host)
+		return nil, ConnectionProblem(err, fmt.Sprintf("request to %s failed", req.URL.Host))
 	}
 	return resp, nil
 }
