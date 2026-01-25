@@ -16,7 +16,7 @@ A modern error handling package for Go, inspired by [gravitational/trace](https:
 ## Installation
 
 ```bash
-go get github.com/yourusername/trace
+go get github.com/tae2089/trace
 ```
 
 ## Quick Start
@@ -56,6 +56,7 @@ func queryDatabase(id string) (*User, error) {
 ```
 
 Output:
+
 ```
 User not found
 [main.go:25 <- main.go:18 <- main.go:12] failed to fetch user user-123: user user-123 does not exist
@@ -358,17 +359,17 @@ func (s *OrderService) PlaceOrder(ctx context.Context, order Order) error {
     if !s.inventory.HasStock(order.ItemID) {
         return trace.Conflict("item %s out of stock", order.ItemID)
     }
-    
+
     // Check user permissions
     if !s.auth.CanPurchase(ctx, order.UserID) {
         return trace.AccessDenied("user cannot place orders")
     }
-    
+
     // Validate
     if order.Quantity <= 0 {
         return trace.BadParameter("quantity must be positive")
     }
-    
+
     return s.repo.SaveOrder(order)
 }
 ```
@@ -409,15 +410,15 @@ func middleware(next http.Handler) http.Handler {
 
 This package is mostly API-compatible with gravitational/trace. Main differences:
 
-| gravitational/trace | This package |
-|---------------------|--------------|
+| gravitational/trace  | This package                            |
+| -------------------- | --------------------------------------- |
 | `trace.Traces` embed | Not needed - use `*TraceError` directly |
-| `trace.OrigError()` | Use `errors.Unwrap()` or `errors.Is/As` |
-| Manual `SetTrace` | Automatic via `Wrap()` |
-| - | `slog` integration |
-| - | Generic `Result` type |
-| - | `Pipeline` pattern |
-| - | Context integration |
+| `trace.OrigError()`  | Use `errors.Unwrap()` or `errors.Is/As` |
+| Manual `SetTrace`    | Automatic via `Wrap()`                  |
+| -                    | `slog` integration                      |
+| -                    | Generic `Result` type                   |
+| -                    | `Pipeline` pattern                      |
+| -                    | Context integration                     |
 
 ## Requirements
 
