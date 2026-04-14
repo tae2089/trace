@@ -45,7 +45,7 @@ func getUserService(userID string) (*User, error) {
 	// Call repository layer
 	user, err := repoFindUser(userID)
 	if err != nil {
-		return nil, trace.Wrap(err, "service: failed to get user %s", userID)
+		return nil, trace.Wrapf(err, "service: failed to get user %s", userID)
 	}
 	return user, nil
 }
@@ -55,7 +55,7 @@ func repoFindUser(userID string) (*User, error) {
 	// Simulate database error
 	err := sql.ErrNoRows
 	if err == sql.ErrNoRows {
-		return nil, trace.WrapNotFound(err, "user %s not found in database", userID)
+		return nil, trace.WrapNotFound(err, fmt.Sprintf("user %s not found in database", userID))
 	}
 	return &User{ID: userID}, nil
 }

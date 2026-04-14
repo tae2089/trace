@@ -75,7 +75,10 @@ func NewErrorHandler(h slog.Handler) *ErrorHandler {
 	return &ErrorHandler{Handler: h}
 }
 
-// Handle processes the log record, extracting trace error information
+func (h *ErrorHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return h.Handler.Enabled(ctx, level)
+}
+
 func (h *ErrorHandler) Handle(ctx context.Context, r slog.Record) error {
 	// Create a new record with enhanced error attributes
 	newRecord := slog.NewRecord(r.Time, r.Level, r.Message, r.PC)
@@ -105,47 +108,26 @@ func (h *ErrorHandler) WithGroup(name string) slog.Handler {
 	return &ErrorHandler{Handler: h.Handler.WithGroup(name)}
 }
 
-// LogError logs an error with full trace information at ERROR level
+func logAtLevel(ctx context.Context, logger *slog.Logger, level slog.Level, msg string, err error, attrs ...slog.Attr) {
+	if err == nil {
+		return
+	}
+	allAttrs := make([]any, 0, len(attrs)+1)
+	allAttrs = append(allAttrs, SlogError(err))
+	for _, a := range attrs {
+		allAttrs = append(allAttrs, a)
+	}
+	logger.Log(ctx, level, msg, allAttrs...)
+}
+
 func LogError(ctx context.Context, logger *slog.Logger, msg string, err error, attrs ...slog.Attr) {
-	if err == nil {
-		return
-	}
-
-	allAttrs := make([]any, 0, len(attrs)+1)
-	allAttrs = append(allAttrs, SlogError(err))
-	for _, a := range attrs {
-		allAttrs = append(allAttrs, a)
-	}
-
-	logger.ErrorContext(ctx, msg, allAttrs...)
+	logAtLevel(ctx, logger, slog.LevelError, msg, err, attrs...)
 }
 
-// LogWarn logs an error with full trace information at WARN level
 func LogWarn(ctx context.Context, logger *slog.Logger, msg string, err error, attrs ...slog.Attr) {
-	if err == nil {
-		return
-	}
-
-	allAttrs := make([]any, 0, len(attrs)+1)
-	allAttrs = append(allAttrs, SlogError(err))
-	for _, a := range attrs {
-		allAttrs = append(allAttrs, a)
-	}
-
-	logger.WarnContext(ctx, msg, allAttrs...)
+	logAtLevel(ctx, logger, slog.LevelWarn, msg, err, attrs...)
 }
 
-// LogDebug logs an error with full trace information at DEBUG level
 func LogDebug(ctx context.Context, logger *slog.Logger, msg string, err error, attrs ...slog.Attr) {
-	if err == nil {
-		return
-	}
-
-	allAttrs := make([]any, 0, len(attrs)+1)
-	allAttrs = append(allAttrs, SlogError(err))
-	for _, a := range attrs {
-		allAttrs = append(allAttrs, a)
-	}
-
-	logger.DebugContext(ctx, msg, allAttrs...)
+	logAtLevel(ctx, logger, slog.LevelDebug, msg, err, attrs...)
 }

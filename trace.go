@@ -167,44 +167,63 @@ func captureFrame(skip int) Frame {
 
 // Wrap wraps an error with stack trace information.
 // If err is nil, Wrap returns nil.
-// If err is already a *TraceError, it adds a new frame to the existing trace.
-func Wrap(err error, msgAndArgs ...any) error {
+// Wrap always creates a new TraceError, preserving the original error
+// (including typed errors like NotFoundError) in the Err field.
+func Wrap(err error, msg ...string) error {
 	if err == nil {
 		return nil
 	}
 
 	frame := captureFrame(2)
-	msg := formatMessage(msgAndArgs...)
+	var message string
+	if len(msg) > 0 {
+		message = msg[0]
+	}
 
-	// If already a TraceError, add frame to existing trace
+	var existingFrames Frames
 	var te *TraceError
 	if errors.As(err, &te) {
-		te.Frames = append(Frames{frame}, te.Frames...)
-		if msg != "" {
-			if te.Message != "" {
-				te.Message = msg + "\n→ " + te.Message
-			} else {
-				te.Message = msg
-			}
-		}
-		return te
+		existingFrames = te.Frames
+	}
+
+	return &TraceError{
+		Err:     err,
+		Message: message,
+		Frames:  append(Frames{frame}, existingFrames...),
+		Fields:  make(map[string]any),
+	}
+}
+
+// Wrapf wraps an error with stack trace and a formatted message.
+func Wrapf(err error, format string, args ...any) error {
+	if err == nil {
+		return nil
+	}
+	return wrapInternal(err, fmt.Sprintf(format, args...), captureFrame(2))
+}
+
+func wrapInternal(err error, msg string, frame Frame) error {
+	var existingFrames Frames
+	var te *TraceError
+	if errors.As(err, &te) {
+		existingFrames = te.Frames
 	}
 
 	return &TraceError{
 		Err:     err,
 		Message: msg,
-		Frames:  Frames{frame},
+		Frames:  append(Frames{frame}, existingFrames...),
 		Fields:  make(map[string]any),
 	}
 }
 
 // WrapWithFields wraps an error with stack trace and structured fields
-func WrapWithFields(err error, fields map[string]any, msgAndArgs ...any) error {
+func WrapWithFields(err error, fields map[string]any, msg ...string) error {
 	if err == nil {
 		return nil
 	}
 
-	wrapped := Wrap(err, msgAndArgs...)
+	wrapped := Wrap(err, msg...)
 	if te, ok := wrapped.(*TraceError); ok {
 		for k, v := range fields {
 			te.Fields[k] = v
@@ -253,25 +272,30 @@ func formatMessage(msgAndArgs ...any) string {
 	return fmt.Sprint(msgAndArgs...)
 }
 
-// GetFrames extracts frames from an error if available
+// GetFrames extracts frames from an error if available.
+// Returns a copy of the frames to prevent external mutation.
 func GetFrames(err error) Frames {
 	var te *TraceError
 	if errors.As(err, &te) {
-		return te.Frames
+		cp := make(Frames, len(te.Frames))
+		copy(cp, te.Frames)
+		return cp
 	}
 	return nil
 }
 
-// GetFields extracts fields from an error if available
+// GetFields extracts fields from an error if available.
+// Returns a copy of the fields to prevent external mutation.
 func GetFields(err error) map[string]any {
 	var te *TraceError
 	if errors.As(err, &te) {
-		return te.Fields
+		return copyFields(te.Fields)
 	}
 	return nil
 }
 
-// WithField adds a field to the error for structured logging
+// WithField adds a field to the error for structured logging.
+// It returns a new wrapper error with the field added, preserving the original error immutably.
 func WithField(err error, key string, value any) error {
 	if err == nil {
 		return nil
@@ -279,19 +303,25 @@ func WithField(err error, key string, value any) error {
 
 	var te *TraceError
 	if errors.As(err, &te) {
-		te.Fields[key] = value
-		return te
+		newFields := copyFields(te.Fields)
+		newFields[key] = value
+		return &TraceError{
+			Err:     err,
+			Message: "",
+			Frames:  append(Frames(nil), te.Frames...),
+			Fields:  newFields,
+		}
 	}
 
-	// Wrap first, then add field
 	wrapped := Wrap(err)
-	if te, ok := wrapped.(*TraceError); ok {
-		te.Fields[key] = value
+	if wte, ok := wrapped.(*TraceError); ok {
+		wte.Fields[key] = value
 	}
 	return wrapped
 }
 
-// WithFields adds multiple fields to the error
+// WithFields adds multiple fields to the error.
+// It returns a new wrapper error with the fields added, preserving the original error immutably.
 func WithFields(err error, fields map[string]any) error {
 	if err == nil {
 		return nil
@@ -299,19 +329,33 @@ func WithFields(err error, fields map[string]any) error {
 
 	var te *TraceError
 	if errors.As(err, &te) {
+		newFields := copyFields(te.Fields)
 		for k, v := range fields {
-			te.Fields[k] = v
+			newFields[k] = v
 		}
-		return te
+		return &TraceError{
+			Err:     err,
+			Message: "",
+			Frames:  append(Frames(nil), te.Frames...),
+			Fields:  newFields,
+		}
 	}
 
 	wrapped := Wrap(err)
-	if te, ok := wrapped.(*TraceError); ok {
+	if wte, ok := wrapped.(*TraceError); ok {
 		for k, v := range fields {
-			te.Fields[k] = v
+			wte.Fields[k] = v
 		}
 	}
 	return wrapped
+}
+
+func copyFields(src map[string]any) map[string]any {
+	dst := make(map[string]any, len(src)+1)
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 // DebugReport returns a detailed report of the error chain

@@ -157,26 +157,6 @@ func As[T error](err error) (T, bool) {
 	return target, false
 }
 
-// TypedWrap wraps an error and returns a specific typed error
-func TypedWrap[T interface {
-	error
-	*E
-}, E any](err error, create func(*TraceError) T, msgAndArgs ...any) error {
-	if err == nil {
-		return nil
-	}
-
-	frame := captureFrame(2)
-	te := &TraceError{
-		Err:     err,
-		Message: formatMessage(msgAndArgs...),
-		Frames:  Frames{frame},
-		Fields:  make(map[string]any),
-	}
-
-	return create(te)
-}
-
 // Pipeline allows chaining operations that may fail
 type Pipeline[T any] struct {
 	value T

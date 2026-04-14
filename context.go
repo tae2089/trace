@@ -8,7 +8,7 @@ import (
 type contextKey string
 
 const (
-	traceIDKey    contextKey = "trace_id"
+	traceIDKey     contextKey = "trace_id"
 	traceFieldsKey contextKey = "trace_fields"
 )
 
@@ -51,23 +51,28 @@ func ContextWithField(ctx context.Context, key string, value any) context.Contex
 	return context.WithValue(ctx, traceFieldsKey, newFields)
 }
 
-// FieldsFromContext retrieves fields from context
+// FieldsFromContext retrieves fields from context.
+// Returns a copy of the fields to prevent external mutation of the context value.
 func FieldsFromContext(ctx context.Context) map[string]any {
 	if v := ctx.Value(traceFieldsKey); v != nil {
 		if m, ok := v.(map[string]any); ok {
-			return m
+			cp := make(map[string]any, len(m))
+			for k, v := range m {
+				cp[k] = v
+			}
+			return cp
 		}
 	}
 	return nil
 }
 
 // WrapContext wraps an error with context information
-func WrapContext(ctx context.Context, err error, msgAndArgs ...any) error {
+func WrapContext(ctx context.Context, err error, msg ...string) error {
 	if err == nil {
 		return nil
 	}
 
-	wrapped := Wrap(err, msgAndArgs...)
+	wrapped := Wrap(err, msg...)
 
 	// Add trace ID if present
 	if traceID := TraceIDFromContext(ctx); traceID != "" {
@@ -136,9 +141,10 @@ type CanceledError struct {
 	*TraceError
 }
 
-func (e *CanceledError) IsCanceled() bool { return true }
-func (e *CanceledError) Error() string    { return e.TraceError.Error() }
-func (e *CanceledError) Unwrap() error    { return e.TraceError }
+func (e *CanceledError) IsCanceled() bool    { return true }
+func (e *CanceledError) HTTPStatusCode() int { return 499 } // Client Closed Request (nginx convention)
+func (e *CanceledError) Error() string       { return e.TraceError.Error() }
+func (e *CanceledError) Unwrap() error       { return e.TraceError }
 
 // ErrorCanceled is an interface for canceled errors
 type ErrorCanceled interface {
@@ -180,8 +186,8 @@ func NewContextualizer(ctx context.Context) *Contextualizer {
 }
 
 // Wrap wraps an error with context information
-func (c *Contextualizer) Wrap(err error, msgAndArgs ...any) error {
-	return WrapContext(c.ctx, err, msgAndArgs...)
+func (c *Contextualizer) Wrap(err error, msg ...string) error {
+	return WrapContext(c.ctx, err, msg...)
 }
 
 // Do executes a function and wraps any error with context

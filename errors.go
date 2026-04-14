@@ -81,31 +81,31 @@ type NotFoundError struct {
 	*TraceError
 }
 
-func (e *NotFoundError) IsNotFound() bool          { return true }
-func (e *NotFoundError) HTTPStatusCode() int       { return http.StatusNotFound }
-func (e *NotFoundError) Error() string             { return e.TraceError.Error() }
-func (e *NotFoundError) Unwrap() error             { return e.TraceError }
-func (e *NotFoundError) LogValue() slog.Value     { return e.TraceError.LogValue() }
+func (e *NotFoundError) IsNotFound() bool     { return true }
+func (e *NotFoundError) HTTPStatusCode() int  { return http.StatusNotFound }
+func (e *NotFoundError) Error() string        { return e.TraceError.Error() }
+func (e *NotFoundError) Unwrap() error        { return e.TraceError }
+func (e *NotFoundError) LogValue() slog.Value { return e.TraceError.LogValue() }
 
 // AlreadyExistsError represents an "already exists" error
 type AlreadyExistsError struct {
 	*TraceError
 }
 
-func (e *AlreadyExistsError) IsAlreadyExists() bool  { return true }
-func (e *AlreadyExistsError) HTTPStatusCode() int    { return http.StatusConflict }
-func (e *AlreadyExistsError) Error() string          { return e.TraceError.Error() }
-func (e *AlreadyExistsError) Unwrap() error          { return e.TraceError }
+func (e *AlreadyExistsError) IsAlreadyExists() bool { return true }
+func (e *AlreadyExistsError) HTTPStatusCode() int   { return http.StatusConflict }
+func (e *AlreadyExistsError) Error() string         { return e.TraceError.Error() }
+func (e *AlreadyExistsError) Unwrap() error         { return e.TraceError }
 
 // BadParameterError represents an invalid parameter error
 type BadParameterError struct {
 	*TraceError
 }
 
-func (e *BadParameterError) IsBadParameter() bool  { return true }
-func (e *BadParameterError) HTTPStatusCode() int   { return http.StatusBadRequest }
-func (e *BadParameterError) Error() string         { return e.TraceError.Error() }
-func (e *BadParameterError) Unwrap() error         { return e.TraceError }
+func (e *BadParameterError) IsBadParameter() bool { return true }
+func (e *BadParameterError) HTTPStatusCode() int  { return http.StatusBadRequest }
+func (e *BadParameterError) Error() string        { return e.TraceError.Error() }
+func (e *BadParameterError) Unwrap() error        { return e.TraceError }
 
 // NotImplementedError represents a "not implemented" error
 type NotImplementedError struct {
@@ -132,10 +132,10 @@ type ConflictError struct {
 	*TraceError
 }
 
-func (e *ConflictError) IsConflict() bool      { return true }
-func (e *ConflictError) HTTPStatusCode() int   { return http.StatusConflict }
-func (e *ConflictError) Error() string         { return e.TraceError.Error() }
-func (e *ConflictError) Unwrap() error         { return e.TraceError }
+func (e *ConflictError) IsConflict() bool    { return true }
+func (e *ConflictError) HTTPStatusCode() int { return http.StatusConflict }
+func (e *ConflictError) Error() string       { return e.TraceError.Error() }
+func (e *ConflictError) Unwrap() error       { return e.TraceError }
 
 // ConnectionProblemError represents a connection error
 type ConnectionProblemError struct {
@@ -164,11 +164,11 @@ type TimeoutError struct {
 	*TraceError
 }
 
-func (e *TimeoutError) IsTimeout() bool      { return true }
-func (e *TimeoutError) IsRetryable() bool    { return true }
-func (e *TimeoutError) HTTPStatusCode() int  { return http.StatusGatewayTimeout }
-func (e *TimeoutError) Error() string        { return e.TraceError.Error() }
-func (e *TimeoutError) Unwrap() error        { return e.TraceError }
+func (e *TimeoutError) IsTimeout() bool     { return true }
+func (e *TimeoutError) IsRetryable() bool   { return true }
+func (e *TimeoutError) HTTPStatusCode() int { return http.StatusGatewayTimeout }
+func (e *TimeoutError) Error() string       { return e.TraceError.Error() }
+func (e *TimeoutError) Unwrap() error       { return e.TraceError }
 
 // Import slog for LogValue - already imported at top
 
@@ -492,26 +492,6 @@ func (e *AggregateError) Error() string {
 // Unwrap returns the list of errors (Go 1.20+ multiple error unwrapping)
 func (e *AggregateError) Unwrap() []error {
 	return e.Errs
-}
-
-// Is checks if any error in the aggregate matches target
-func (e *AggregateError) Is(target error) bool {
-	for _, err := range e.Errs {
-		if errors.Is(err, target) {
-			return true
-		}
-	}
-	return false
-}
-
-// As finds the first error that matches target
-func (e *AggregateError) As(target any) bool {
-	for _, err := range e.Errs {
-		if errors.As(err, target) {
-			return true
-		}
-	}
-	return false
 }
 
 // HTTPStatusCode returns the most severe HTTP status code

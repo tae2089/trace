@@ -58,7 +58,9 @@ func WriteErrorWithLogger(w http.ResponseWriter, err error, logger *slog.Logger)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(resp)
+	if encErr := json.NewEncoder(w).Encode(resp); encErr != nil && logger != nil {
+		logger.Error("failed to encode error response", "encode_error", encErr)
+	}
 }
 
 // ErrorHandlerFunc is a function that handles HTTP requests and may return an error
@@ -111,11 +113,13 @@ func RecoverMiddleware(next http.Handler, logger *slog.Logger) http.Handler {
 
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusInternalServerError)
-				json.NewEncoder(w).Encode(ErrorResponse{
+				if encErr := json.NewEncoder(w).Encode(ErrorResponse{
 					Error:   "Internal Server Error",
 					Code:    http.StatusInternalServerError,
 					Message: "An unexpected error occurred",
-				})
+				}); encErr != nil && logger != nil {
+					logger.Error("failed to encode panic response", "encode_error", encErr)
+				}
 			}
 		}()
 
@@ -151,7 +155,7 @@ func FromHTTPResponse(resp *http.Response, body []byte) error {
 		return &ConflictError{TraceError: te}
 	case http.StatusBadRequest:
 		return &BadParameterError{TraceError: te}
-	case http.StatusForbidden:
+	case http.StatusUnauthorized, http.StatusForbidden:
 		return &AccessDeniedError{TraceError: te}
 	case http.StatusTooManyRequests:
 		return &LimitExceededError{TraceError: te}
@@ -160,7 +164,10 @@ func FromHTTPResponse(resp *http.Response, body []byte) error {
 	case http.StatusServiceUnavailable, http.StatusBadGateway:
 		return &ConnectionProblemError{TraceError: te}
 	default:
-		return te
+		return &httpStatusError{
+			TraceError: te,
+			statusCode: resp.StatusCode,
+		}
 	}
 }
 
@@ -170,15 +177,19 @@ func IsHTTPError(err error, statusCode int) bool {
 }
 
 // WrapHTTPError wraps an error with HTTP status code information
-func WrapHTTPError(err error, statusCode int, msgAndArgs ...any) error {
+func WrapHTTPError(err error, statusCode int, msg ...string) error {
 	if err == nil {
 		return nil
 	}
 
 	frame := captureFrame(2)
+	var message string
+	if len(msg) > 0 {
+		message = msg[0]
+	}
 	te := &TraceError{
 		Err:     err,
-		Message: formatMessage(msgAndArgs...),
+		Message: message,
 		Frames:  Frames{frame},
 		Fields: map[string]any{
 			"http_status": statusCode,
