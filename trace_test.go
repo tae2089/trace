@@ -481,3 +481,349 @@ func ExampleResult() {
 	}
 	// Output: File not found, using default
 }
+
+// P1: slog JSON schema — trace should serialize as []map[string]any
+func TestSlogTraceJSONSchema(t *testing.T) {
+	var buf strings.Builder
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+
+	err := trace.Wrap(errors.New("db error"), "query failed")
+	err = trace.WithField(err, "user_id", "u1")
+	logger.Error("op failed", trace.SlogError(err))
+
+	var parsed map[string]any
+	if e := json.Unmarshal([]byte(buf.String()), &parsed); e != nil {
+		t.Fatalf("invalid JSON: %v", e)
+	}
+
+	errObj, ok := parsed["error"].(map[string]any)
+	if !ok {
+		t.Fatal("missing error object")
+	}
+
+	if errObj["message"] != "query failed" {
+		t.Errorf("unexpected message: %v", errObj["message"])
+	}
+	if errObj["cause"] != "db error" {
+		t.Errorf("unexpected cause: %v", errObj["cause"])
+	}
+
+	traceArr, ok := errObj["trace"].([]any)
+	if !ok || len(traceArr) == 0 {
+		t.Fatal("trace should be a non-empty array")
+	}
+	frame0, ok := traceArr[0].(map[string]any)
+	if !ok {
+		t.Fatal("trace element should be an object")
+	}
+	for _, key := range []string{"file", "line", "func"} {
+		if _, exists := frame0[key]; !exists {
+			t.Errorf("trace frame missing key %q", key)
+		}
+	}
+
+	fieldsObj, ok := errObj["fields"].(map[string]any)
+	if !ok {
+		t.Fatal("fields should be an object")
+	}
+	if fieldsObj["user_id"] != "u1" {
+		t.Errorf("field user_id not found: %v", fieldsObj)
+	}
+}
+
+// P2: WithField/WithFields preserves typed wrapper
+func TestWithFieldPreservesTypedWrapper(t *testing.T) {
+	err := trace.NotFound("user not found")
+	err = trace.WithField(err, "user_id", "abc")
+	err = trace.WithFields(err, map[string]any{"tenant": "t1"})
+
+	if !trace.IsNotFound(err) {
+		t.Error("should still be NotFound after WithField/WithFields")
+	}
+
+	fields := trace.GetFields(err)
+	if fields["user_id"] != "abc" {
+		t.Error("user_id field missing")
+	}
+	if fields["tenant"] != "t1" {
+		t.Error("tenant field missing")
+	}
+}
+
+// P3: WrapNotFound preserves existing frames from inner TraceError
+func TestWrapTypedPreservesFrames(t *testing.T) {
+	inner := trace.Wrap(errors.New("root"), "inner layer")
+	innerFrames := trace.GetFrames(inner)
+
+	wrapped := trace.WrapNotFound(inner, "not found")
+	wrappedFrames := trace.GetFrames(wrapped)
+
+	if len(wrappedFrames) < len(innerFrames)+1 {
+		t.Errorf("WrapNotFound should accumulate frames: got %d, inner had %d", len(wrappedFrames), len(innerFrames))
+	}
+
+	if !trace.IsNotFound(wrapped) {
+		t.Error("should be NotFound")
+	}
+}
+
+// P3: WrapNotFound preserves existing fields from inner TraceError
+func TestWrapTypedPreservesFields(t *testing.T) {
+	inner := trace.Wrap(errors.New("root"), "inner")
+	inner = trace.WithField(inner, "key1", "val1")
+
+	wrapped := trace.WrapNotFound(inner, "not found")
+	fields := trace.GetFields(wrapped)
+
+	if fields["key1"] != "val1" {
+		t.Errorf("WrapNotFound should preserve inner fields, got: %v", fields)
+	}
+}
+
+// P3: WrapHTTPError preserves frames/fields
+func TestWrapHTTPErrorPreservesFramesAndFields(t *testing.T) {
+	inner := trace.Wrap(errors.New("root"), "inner")
+	inner = trace.WithField(inner, "req_id", "r1")
+	innerFrameCount := len(trace.GetFrames(inner))
+
+	wrapped := trace.WrapHTTPError(inner, 503, "service down")
+	wrappedFrames := trace.GetFrames(wrapped)
+	wrappedFields := trace.GetFields(wrapped)
+
+	if len(wrappedFrames) < innerFrameCount+1 {
+		t.Errorf("WrapHTTPError should accumulate frames: got %d, inner had %d", len(wrappedFrames), innerFrameCount)
+	}
+	if wrappedFields["req_id"] != "r1" {
+		t.Error("WrapHTTPError should preserve inner fields")
+	}
+	if wrappedFields["http_status"] != 503 {
+		t.Error("WrapHTTPError should set http_status field")
+	}
+}
+
+// P4: DebugReport walks AggregateError children
+func TestDebugReportAggregateError(t *testing.T) {
+	err1 := trace.NotFound("item 1 missing")
+	err2 := trace.BadParameter("invalid input")
+	agg := trace.Aggregate(err1, err2)
+
+	report := trace.DebugReport(agg)
+
+	if !strings.Contains(report, "item 1 missing") {
+		t.Error("report should contain first child message")
+	}
+	if !strings.Contains(report, "invalid input") {
+		t.Error("report should contain second child message")
+	}
+	if !strings.Contains(report, "AggregateError") {
+		t.Error("report should contain AggregateError type")
+	}
+}
+
+// P5: ConnectionProblem(nil) returns nil
+func TestConnectionProblemNilGuard(t *testing.T) {
+	if err := trace.ConnectionProblem(nil, "should be nil"); err != nil {
+		t.Errorf("ConnectionProblem(nil) should return nil, got: %v", err)
+	}
+}
+
+// P5: Timeout(nil) returns nil
+func TestTimeoutNilGuard(t *testing.T) {
+	if err := trace.Timeout(nil, "should be nil"); err != nil {
+		t.Errorf("Timeout(nil) should return nil, got: %v", err)
+	}
+}
+
+func TestCollectAllOk(t *testing.T) {
+	r := trace.Collect(trace.Ok(1), trace.Ok(2), trace.Ok(3))
+	if r.IsErr() {
+		t.Fatal("expected Ok")
+	}
+	vals := r.Unwrap()
+	if len(vals) != 3 || vals[0] != 1 || vals[1] != 2 || vals[2] != 3 {
+		t.Errorf("unexpected values: %v", vals)
+	}
+}
+
+func TestCollectWithErrors(t *testing.T) {
+	r := trace.Collect(
+		trace.Ok(1),
+		trace.Err[int](errors.New("fail1")),
+		trace.Err[int](errors.New("fail2")),
+	)
+	if r.IsOk() {
+		t.Fatal("expected Err")
+	}
+	errStr := r.Error().Error()
+	if !strings.Contains(errStr, "fail1") || !strings.Contains(errStr, "fail2") {
+		t.Errorf("aggregate should contain both errors: %s", errStr)
+	}
+}
+
+func TestMapErr(t *testing.T) {
+	r := trace.Err[int](errors.New("original"))
+	mapped := trace.MapErr(r, func(err error) error {
+		return fmt.Errorf("wrapped: %w", err)
+	})
+	if mapped.IsOk() {
+		t.Fatal("expected Err")
+	}
+	if !strings.Contains(mapped.Error().Error(), "wrapped") {
+		t.Errorf("error should be mapped: %v", mapped.Error())
+	}
+}
+
+func TestMapErrOnOk(t *testing.T) {
+	r := trace.Ok(42)
+	mapped := trace.MapErr(r, func(err error) error {
+		return fmt.Errorf("should not be called")
+	})
+	if !mapped.IsOk() || mapped.Unwrap() != 42 {
+		t.Error("MapErr on Ok should pass through")
+	}
+}
+
+func TestErrMsg(t *testing.T) {
+	r := trace.ErrMsg[string]("something failed")
+	if r.IsOk() {
+		t.Fatal("expected Err")
+	}
+	if !strings.Contains(r.Error().Error(), "something failed") {
+		t.Errorf("unexpected error: %v", r.Error())
+	}
+}
+
+func TestFlatMap(t *testing.T) {
+	r := trace.Ok(10)
+	result := trace.FlatMap(r, func(v int) trace.Result[string] {
+		return trace.Ok(fmt.Sprintf("val=%d", v))
+	})
+	if !result.IsOk() || result.Unwrap() != "val=10" {
+		t.Errorf("unexpected result: %v", result)
+	}
+}
+
+func TestFlatMapPropagatesError(t *testing.T) {
+	r := trace.Err[int](errors.New("initial"))
+	result := trace.FlatMap(r, func(v int) trace.Result[string] {
+		t.Fatal("should not be called")
+		return trace.Ok("")
+	})
+	if result.IsOk() {
+		t.Error("FlatMap should propagate error")
+	}
+}
+
+func TestPipelineThenDo(t *testing.T) {
+	var sideEffect int
+	result, err := trace.NewPipeline(5).
+		ThenDo(func(v int) error {
+			sideEffect = v * 10
+			return nil
+		}).
+		Result()
+
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if result != 5 {
+		t.Errorf("ThenDo should not modify value, got %d", result)
+	}
+	if sideEffect != 50 {
+		t.Errorf("side effect not executed, got %d", sideEffect)
+	}
+}
+
+func TestPipelineThenDoError(t *testing.T) {
+	_, err := trace.NewPipeline(5).
+		ThenDo(func(v int) error {
+			return errors.New("side effect failed")
+		}).
+		Then(func(v int) (int, error) {
+			t.Fatal("should not execute after ThenDo error")
+			return v, nil
+		}).
+		Result()
+
+	if err == nil {
+		t.Error("expected error from ThenDo")
+	}
+}
+
+func TestPipelineRecover(t *testing.T) {
+	result, err := trace.NewPipeline(0).
+		Then(func(v int) (int, error) {
+			return 0, errors.New("oops")
+		}).
+		Recover(func(err error) (int, error) {
+			return 99, nil
+		}).
+		Result()
+
+	if err != nil {
+		t.Errorf("expected recovery, got error: %v", err)
+	}
+	if result != 99 {
+		t.Errorf("expected 99, got %d", result)
+	}
+}
+
+func TestPipelineRecoverWith(t *testing.T) {
+	result, err := trace.NewPipeline(0).
+		Then(func(v int) (int, error) {
+			return 0, errors.New("oops")
+		}).
+		RecoverWith(42).
+		Result()
+
+	if err != nil {
+		t.Errorf("expected recovery, got error: %v", err)
+	}
+	if result != 42 {
+		t.Errorf("expected 42, got %d", result)
+	}
+}
+
+func TestPipelineRecoverWithNoError(t *testing.T) {
+	result, err := trace.NewPipeline(10).
+		RecoverWith(42).
+		Result()
+
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if result != 10 {
+		t.Errorf("RecoverWith should not change value when no error, got %d", result)
+	}
+}
+
+func TestTransformPipeline(t *testing.T) {
+	p := trace.NewPipeline(42)
+	result := trace.TransformPipeline(p, func(v int) (string, error) {
+		return fmt.Sprintf("num=%d", v), nil
+	})
+
+	val, err := result.Result()
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if val != "num=42" {
+		t.Errorf("expected 'num=42', got %q", val)
+	}
+}
+
+func TestTransformPipelinePropagatesError(t *testing.T) {
+	p := trace.NewPipeline(0).Then(func(v int) (int, error) {
+		return 0, errors.New("upstream fail")
+	})
+
+	result := trace.TransformPipeline(p, func(v int) (string, error) {
+		t.Fatal("should not be called")
+		return "", nil
+	})
+
+	_, err := result.Result()
+	if err == nil {
+		t.Error("expected error propagation")
+	}
+}

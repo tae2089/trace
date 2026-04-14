@@ -187,14 +187,11 @@ func WrapHTTPError(err error, statusCode int, msg ...string) error {
 	if len(msg) > 0 {
 		message = msg[0]
 	}
-	te := &TraceError{
-		Err:     err,
-		Message: message,
-		Frames:  Frames{frame},
-		Fields: map[string]any{
-			"http_status": statusCode,
-		},
+	te := wrapTypedInternal(err, message, frame)
+	if te.Fields == nil {
+		te.Fields = make(map[string]any)
 	}
+	te.Fields["http_status"] = statusCode
 
 	return &httpStatusError{
 		TraceError: te,

@@ -114,9 +114,10 @@ func (e *TraceError) Format(s fmt.State, verb rune) {
 	}
 }
 
-// LogValue implements slog.LogValuer for structured logging
+// LogValue implements slog.LogValuer for structured logging.
+// Schema: {"message":..., "cause":..., "trace":[{"file":..., "line":..., "func":...}], "fields":{...}}
 func (e *TraceError) LogValue() slog.Value {
-	attrs := make([]slog.Attr, 0, 4+len(e.Fields))
+	attrs := make([]slog.Attr, 0, 4)
 
 	attrs = append(attrs, slog.String("message", e.Message))
 
@@ -125,24 +126,26 @@ func (e *TraceError) LogValue() slog.Value {
 	}
 
 	if len(e.Frames) > 0 {
-		frameAttrs := make([]any, 0, len(e.Frames)*3)
-		for i, f := range e.Frames {
-			frameAttrs = append(frameAttrs,
-				slog.Group(strconv.Itoa(i),
-					slog.String("file", f.File),
-					slog.Int("line", f.Line),
-					slog.String("func", f.Function),
-				),
-			)
-		}
-		attrs = append(attrs, slog.Any("trace", frameAttrs))
+		attrs = append(attrs, slog.Any("trace", framesToSerializable(e.Frames)))
 	}
 
-	for k, v := range e.Fields {
-		attrs = append(attrs, slog.Any(k, v))
+	if len(e.Fields) > 0 {
+		attrs = append(attrs, slog.Any("fields", e.Fields))
 	}
 
 	return slog.GroupValue(attrs...)
+}
+
+func framesToSerializable(frames Frames) []map[string]any {
+	result := make([]map[string]any, len(frames))
+	for i, f := range frames {
+		result[i] = map[string]any{
+			"file": f.File,
+			"line": f.Line,
+			"func": f.Function,
+		}
+	}
+	return result
 }
 
 // captureFrame captures a single stack frame at the given skip level
@@ -305,12 +308,9 @@ func WithField(err error, key string, value any) error {
 	if errors.As(err, &te) {
 		newFields := copyFields(te.Fields)
 		newFields[key] = value
-		return &TraceError{
-			Err:     err,
-			Message: "",
-			Frames:  append(Frames(nil), te.Frames...),
-			Fields:  newFields,
-		}
+		clone := cloneTraceError(te)
+		clone.Fields = newFields
+		return replaceTraceError(err, te, clone)
 	}
 
 	wrapped := Wrap(err)
@@ -320,8 +320,6 @@ func WithField(err error, key string, value any) error {
 	return wrapped
 }
 
-// WithFields adds multiple fields to the error.
-// It returns a new wrapper error with the fields added, preserving the original error immutably.
 func WithFields(err error, fields map[string]any) error {
 	if err == nil {
 		return nil
@@ -333,12 +331,9 @@ func WithFields(err error, fields map[string]any) error {
 		for k, v := range fields {
 			newFields[k] = v
 		}
-		return &TraceError{
-			Err:     err,
-			Message: "",
-			Frames:  append(Frames(nil), te.Frames...),
-			Fields:  newFields,
-		}
+		clone := cloneTraceError(te)
+		clone.Fields = newFields
+		return replaceTraceError(err, te, clone)
 	}
 
 	wrapped := Wrap(err)
@@ -348,6 +343,70 @@ func WithFields(err error, fields map[string]any) error {
 		}
 	}
 	return wrapped
+}
+
+func cloneTraceError(te *TraceError) *TraceError {
+	return &TraceError{
+		Err:     te.Err,
+		Message: te.Message,
+		Frames:  append(Frames(nil), te.Frames...),
+		Fields:  copyFields(te.Fields),
+	}
+}
+
+func replaceTraceError(err error, original *TraceError, replacement *TraceError) error {
+	if err == original {
+		return replacement
+	}
+
+	switch e := err.(type) {
+	case *NotFoundError:
+		if e.TraceError == original {
+			return &NotFoundError{TraceError: replacement}
+		}
+	case *AlreadyExistsError:
+		if e.TraceError == original {
+			return &AlreadyExistsError{TraceError: replacement}
+		}
+	case *BadParameterError:
+		if e.TraceError == original {
+			return &BadParameterError{TraceError: replacement}
+		}
+	case *NotImplementedError:
+		if e.TraceError == original {
+			return &NotImplementedError{TraceError: replacement}
+		}
+	case *AccessDeniedError:
+		if e.TraceError == original {
+			return &AccessDeniedError{TraceError: replacement}
+		}
+	case *ConflictError:
+		if e.TraceError == original {
+			return &ConflictError{TraceError: replacement}
+		}
+	case *ConnectionProblemError:
+		if e.TraceError == original {
+			return &ConnectionProblemError{TraceError: replacement}
+		}
+	case *LimitExceededError:
+		if e.TraceError == original {
+			return &LimitExceededError{TraceError: replacement}
+		}
+	case *TimeoutError:
+		if e.TraceError == original {
+			return &TimeoutError{TraceError: replacement}
+		}
+	case *CanceledError:
+		if e.TraceError == original {
+			return &CanceledError{TraceError: replacement}
+		}
+	case *httpStatusError:
+		if e.TraceError == original {
+			return &httpStatusError{TraceError: replacement, statusCode: e.statusCode}
+		}
+	}
+
+	return replacement
 }
 
 func copyFields(src map[string]any) map[string]any {
@@ -368,33 +427,46 @@ func DebugReport(err error) string {
 	b.WriteString("Error Report:\n")
 	b.WriteString("=============\n\n")
 
-	// Walk the error chain
-	depth := 0
-	for e := err; e != nil; e = errors.Unwrap(e) {
-		indent := strings.Repeat("  ", depth)
-		fmt.Fprintf(&b, "%s[%d] %T\n", indent, depth, e)
-
-		if te, ok := e.(*TraceError); ok {
-			if te.Message != "" {
-				fmt.Fprintf(&b, "%s    Message: %s\n", indent, te.Message)
-			}
-			for _, f := range te.Frames {
-				fmt.Fprintf(&b, "%s    at %s\n", indent, f.String())
-			}
-			if len(te.Fields) > 0 {
-				fmt.Fprintf(&b, "%s    Fields:\n", indent)
-				for k, v := range te.Fields {
-					fmt.Fprintf(&b, "%s      %s: %v\n", indent, k, v)
-				}
-			}
-		} else {
-			fmt.Fprintf(&b, "%s    %s\n", indent, e.Error())
-		}
-
-		depth++
-	}
+	debugReportWalk(&b, err, 0)
 
 	return b.String()
+}
+
+func debugReportWalk(b *strings.Builder, err error, depth int) {
+	if err == nil {
+		return
+	}
+
+	indent := strings.Repeat("  ", depth)
+	fmt.Fprintf(b, "%s[%d] %T\n", indent, depth, err)
+
+	if te, ok := err.(*TraceError); ok {
+		if te.Message != "" {
+			fmt.Fprintf(b, "%s    Message: %s\n", indent, te.Message)
+		}
+		for _, f := range te.Frames {
+			fmt.Fprintf(b, "%s    at %s\n", indent, f.String())
+		}
+		if len(te.Fields) > 0 {
+			fmt.Fprintf(b, "%s    Fields:\n", indent)
+			for k, v := range te.Fields {
+				fmt.Fprintf(b, "%s      %s: %v\n", indent, k, v)
+			}
+		}
+	} else {
+		fmt.Fprintf(b, "%s    %s\n", indent, err.Error())
+	}
+
+	if multi, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, child := range multi.Unwrap() {
+			debugReportWalk(b, child, depth+1)
+		}
+		return
+	}
+
+	if next := errors.Unwrap(err); next != nil {
+		debugReportWalk(b, next, depth+1)
+	}
 }
 
 // UserMessage returns a user-friendly error message without stack traces

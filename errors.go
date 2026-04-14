@@ -172,6 +172,24 @@ func (e *TimeoutError) Unwrap() error       { return e.TraceError }
 
 // Import slog for LogValue - already imported at top
 
+func wrapTypedInternal(err error, msg string, frame Frame) *TraceError {
+	var existingFrames Frames
+	existingFields := make(map[string]any)
+	var te *TraceError
+	if err != nil && errors.As(err, &te) {
+		existingFrames = te.Frames
+		for k, v := range te.Fields {
+			existingFields[k] = v
+		}
+	}
+	return &TraceError{
+		Err:     err,
+		Message: msg,
+		Frames:  append(Frames{frame}, existingFrames...),
+		Fields:  existingFields,
+	}
+}
+
 // Constructor functions for typed errors
 
 // NotFound creates a new NotFoundError
@@ -193,12 +211,7 @@ func WrapNotFound(err error, msgAndArgs ...any) error {
 	}
 	frame := captureFrame(2)
 	return &NotFoundError{
-		TraceError: &TraceError{
-			Err:     err,
-			Message: formatMessage(msgAndArgs...),
-			Frames:  Frames{frame},
-			Fields:  make(map[string]any),
-		},
+		TraceError: wrapTypedInternal(err, formatMessage(msgAndArgs...), frame),
 	}
 }
 
@@ -221,12 +234,7 @@ func WrapAlreadyExists(err error, msgAndArgs ...any) error {
 	}
 	frame := captureFrame(2)
 	return &AlreadyExistsError{
-		TraceError: &TraceError{
-			Err:     err,
-			Message: formatMessage(msgAndArgs...),
-			Frames:  Frames{frame},
-			Fields:  make(map[string]any),
-		},
+		TraceError: wrapTypedInternal(err, formatMessage(msgAndArgs...), frame),
 	}
 }
 
@@ -249,12 +257,7 @@ func WrapBadParameter(err error, msgAndArgs ...any) error {
 	}
 	frame := captureFrame(2)
 	return &BadParameterError{
-		TraceError: &TraceError{
-			Err:     err,
-			Message: formatMessage(msgAndArgs...),
-			Frames:  Frames{frame},
-			Fields:  make(map[string]any),
-		},
+		TraceError: wrapTypedInternal(err, formatMessage(msgAndArgs...), frame),
 	}
 }
 
@@ -289,12 +292,7 @@ func WrapAccessDenied(err error, msgAndArgs ...any) error {
 	}
 	frame := captureFrame(2)
 	return &AccessDeniedError{
-		TraceError: &TraceError{
-			Err:     err,
-			Message: formatMessage(msgAndArgs...),
-			Frames:  Frames{frame},
-			Fields:  make(map[string]any),
-		},
+		TraceError: wrapTypedInternal(err, formatMessage(msgAndArgs...), frame),
 	}
 }
 
@@ -310,16 +308,15 @@ func Conflict(msgAndArgs ...any) error {
 	}
 }
 
-// ConnectionProblem creates a new ConnectionProblemError
+// ConnectionProblem creates a new ConnectionProblemError.
+// If err is nil, returns nil.
 func ConnectionProblem(err error, msgAndArgs ...any) error {
+	if err == nil {
+		return nil
+	}
 	frame := captureFrame(2)
 	return &ConnectionProblemError{
-		TraceError: &TraceError{
-			Err:     err,
-			Message: formatMessage(msgAndArgs...),
-			Frames:  Frames{frame},
-			Fields:  make(map[string]any),
-		},
+		TraceError: wrapTypedInternal(err, formatMessage(msgAndArgs...), frame),
 	}
 }
 
@@ -335,16 +332,15 @@ func LimitExceeded(msgAndArgs ...any) error {
 	}
 }
 
-// Timeout creates a new TimeoutError
+// Timeout creates a new TimeoutError.
+// If err is nil, returns nil.
 func Timeout(err error, msgAndArgs ...any) error {
+	if err == nil {
+		return nil
+	}
 	frame := captureFrame(2)
 	return &TimeoutError{
-		TraceError: &TraceError{
-			Err:     err,
-			Message: formatMessage(msgAndArgs...),
-			Frames:  Frames{frame},
-			Fields:  make(map[string]any),
-		},
+		TraceError: wrapTypedInternal(err, formatMessage(msgAndArgs...), frame),
 	}
 }
 

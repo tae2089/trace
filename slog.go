@@ -6,8 +6,8 @@ import (
 	"log/slog"
 )
 
-// SlogError returns slog attributes for an error
-// Usage: slog.Error("operation failed", trace.SlogError(err))
+// SlogError returns slog attributes for an error.
+// Schema matches TraceError.LogValue: {"message":..., "cause":..., "trace":[...], "fields":{...}}
 func SlogError(err error) slog.Attr {
 	if err == nil {
 		return slog.Attr{}
@@ -15,17 +15,30 @@ func SlogError(err error) slog.Attr {
 
 	var te *TraceError
 	if errors.As(err, &te) {
-		return slog.Group("error",
+		attrs := []slog.Attr{
 			slog.String("message", te.Message),
 			slog.Any("cause", errorCause(te.Err)),
-			slog.Any("trace", framesToSlogValue(te.Frames)),
-			slog.Any("fields", te.Fields),
-		)
+		}
+		if len(te.Frames) > 0 {
+			attrs = append(attrs, slog.Any("trace", framesToSerializable(te.Frames)))
+		}
+		if len(te.Fields) > 0 {
+			attrs = append(attrs, slog.Any("fields", te.Fields))
+		}
+		return slog.Group("error", attrsToAny(attrs)...)
 	}
 
 	return slog.Group("error",
 		slog.String("message", err.Error()),
 	)
+}
+
+func attrsToAny(attrs []slog.Attr) []any {
+	result := make([]any, len(attrs))
+	for i, a := range attrs {
+		result[i] = a
+	}
+	return result
 }
 
 // SlogErrorValue returns a slog.Value for an error
@@ -47,22 +60,6 @@ func errorCause(err error) any {
 		return nil
 	}
 	return err.Error()
-}
-
-func framesToSlogValue(frames Frames) []any {
-	if len(frames) == 0 {
-		return nil
-	}
-
-	result := make([]any, len(frames))
-	for i, f := range frames {
-		result[i] = slog.Group("",
-			slog.String("file", f.File),
-			slog.Int("line", f.Line),
-			slog.String("func", f.Function),
-		)
-	}
-	return result
 }
 
 // ErrorHandler wraps an slog.Handler to automatically extract trace information
