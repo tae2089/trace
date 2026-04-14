@@ -69,6 +69,9 @@ type ErrorHandler struct {
 
 // NewErrorHandler creates a new ErrorHandler wrapping the given handler
 func NewErrorHandler(h slog.Handler) *ErrorHandler {
+	if h == nil {
+		h = slog.DiscardHandler
+	}
 	return &ErrorHandler{Handler: h}
 }
 

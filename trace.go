@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"log/slog"
 	"path/filepath"
 	"runtime"
@@ -486,4 +487,31 @@ func UserMessage(err error) string {
 	}
 
 	return err.Error()
+}
+
+// Errors returns an iterator over the error chain (Go 1.23+).
+// It yields each error in the chain by following Unwrap() error and
+// recursively traversing Unwrap() []error (e.g., AggregateError).
+func Errors(err error) iter.Seq[error] {
+	return func(yield func(error) bool) {
+		errorsWalk(err, yield)
+	}
+}
+
+func errorsWalk(err error, yield func(error) bool) bool {
+	if err == nil {
+		return true
+	}
+	if !yield(err) {
+		return false
+	}
+	if multi, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, child := range multi.Unwrap() {
+			if !errorsWalk(child, yield) {
+				return false
+			}
+		}
+		return true
+	}
+	return errorsWalk(errors.Unwrap(err), yield)
 }

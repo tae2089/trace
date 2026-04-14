@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tae2089/trace"
 )
@@ -433,7 +434,7 @@ type User struct {
 func BenchmarkWrap(b *testing.B) {
 	err := errors.New("original error")
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_ = trace.Wrap(err, "wrapped")
 	}
 }
@@ -441,7 +442,7 @@ func BenchmarkWrap(b *testing.B) {
 func BenchmarkWrapChain(b *testing.B) {
 	err := errors.New("original error")
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		e := trace.Wrap(err, "level 1")
 		e = trace.Wrap(e, "level 2")
 		e = trace.Wrap(e, "level 3")
@@ -453,7 +454,7 @@ func BenchmarkIsNotFound(b *testing.B) {
 	err := trace.NotFound("not found")
 	err = trace.Wrap(err, "wrapped")
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_ = trace.IsNotFound(err)
 	}
 }
@@ -825,5 +826,223 @@ func TestTransformPipelinePropagatesError(t *testing.T) {
 	_, err := result.Result()
 	if err == nil {
 		t.Error("expected error propagation")
+	}
+}
+
+// F1: context.Cause preserves cancellation cause
+func TestFromContextWithCancelCause(t *testing.T) {
+	causeErr := errors.New("shutdown requested")
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(causeErr)
+
+	err := trace.FromContext(ctx)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !trace.IsCanceled(err) {
+		t.Error("should be canceled")
+	}
+	if !strings.Contains(err.Error(), "shutdown requested") {
+		t.Errorf("cause should be preserved, got: %s", err.Error())
+	}
+}
+
+func TestFromContextWithCancelCauseNilFallback(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := trace.FromContext(ctx)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !trace.IsCanceled(err) {
+		t.Error("should be canceled")
+	}
+	if !strings.Contains(err.Error(), "context canceled") {
+		t.Errorf("should fall back to ctx.Err(), got: %s", err.Error())
+	}
+}
+
+// F2: Errors iterator
+func TestErrorsIteratorSingleChain(t *testing.T) {
+	root := errors.New("root")
+	wrapped := trace.Wrap(root, "layer1")
+	wrapped = trace.Wrap(wrapped, "layer2")
+
+	var count int
+	for range trace.Errors(wrapped) {
+		count++
+	}
+	if count < 3 {
+		t.Errorf("expected at least 3 errors in chain, got %d", count)
+	}
+}
+
+func TestErrorsIteratorAggregate(t *testing.T) {
+	err1 := trace.NotFound("a")
+	err2 := trace.BadParameter("b")
+	agg := trace.Aggregate(err1, err2)
+
+	var messages []string
+	for e := range trace.Errors(agg) {
+		messages = append(messages, e.Error())
+	}
+	found := strings.Join(messages, " | ")
+	if !strings.Contains(found, "a") || !strings.Contains(found, "b") {
+		t.Errorf("should traverse all children, got: %s", found)
+	}
+}
+
+func TestErrorsIteratorNil(t *testing.T) {
+	var count int
+	for range trace.Errors(nil) {
+		count++
+	}
+	if count != 0 {
+		t.Error("nil error should yield nothing")
+	}
+}
+
+func TestErrorsIteratorEarlyBreak(t *testing.T) {
+	root := errors.New("root")
+	wrapped := trace.Wrap(root, "l1")
+	wrapped = trace.Wrap(wrapped, "l2")
+
+	var count int
+	for range trace.Errors(wrapped) {
+		count++
+		if count == 1 {
+			break
+		}
+	}
+	if count != 1 {
+		t.Error("early break should stop iteration")
+	}
+}
+
+// F3: DetachedContext
+func TestDetachedContext(t *testing.T) {
+	parent := context.Background()
+	parent = trace.ContextWithTraceID(parent, "trace-abc")
+	parent = trace.ContextWithField(parent, "env", "test")
+
+	detached := trace.DetachedContext(parent)
+
+	if trace.TraceIDFromContext(detached) != "trace-abc" {
+		t.Error("detached context should preserve values")
+	}
+	fields := trace.FieldsFromContext(detached)
+	if fields["env"] != "test" {
+		t.Error("detached context should preserve fields")
+	}
+}
+
+func TestDetachedContextNotCanceled(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	detached := trace.DetachedContext(parent)
+	cancel()
+
+	select {
+	case <-detached.Done():
+		t.Error("detached context should NOT be canceled when parent is canceled")
+	default:
+	}
+}
+
+// F4: OnCancel
+func TestOnCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	c := trace.NewContextualizer(ctx)
+
+	called := make(chan struct{})
+	c.OnCancel(func() {
+		close(called)
+	})
+
+	cancel()
+
+	select {
+	case <-called:
+	case <-time.After(time.Second):
+		t.Error("OnCancel callback should have been called")
+	}
+}
+
+func TestOnCancelStop(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := trace.NewContextualizer(ctx)
+
+	var called bool
+	stop := c.OnCancel(func() {
+		called = true
+	})
+
+	if !stop() {
+		t.Error("stop should return true before cancellation")
+	}
+
+	cancel()
+	time.Sleep(50 * time.Millisecond)
+
+	if called {
+		t.Error("callback should not run after stop()")
+	}
+}
+
+// F5: WithCancelCause / WithTimeoutCause
+func TestWithCancelCause(t *testing.T) {
+	cause := errors.New("manual shutdown")
+	ctx, cancel := trace.WithCancelCause(context.Background())
+	cancel(cause)
+
+	<-ctx.Done()
+	if context.Cause(ctx) != cause {
+		t.Errorf("expected cause %v, got %v", cause, context.Cause(ctx))
+	}
+}
+
+func TestWithTimeoutCause(t *testing.T) {
+	cause := errors.New("slow query")
+	ctx, cancel := trace.WithTimeoutCause(context.Background(), 10*time.Millisecond, cause)
+	defer cancel()
+
+	<-ctx.Done()
+	if context.Cause(ctx) != cause {
+		t.Errorf("expected cause %v, got %v", cause, context.Cause(ctx))
+	}
+}
+
+// F6: NewErrorHandler nil fallback uses DiscardHandler
+func TestNewErrorHandlerNilUsesDiscard(t *testing.T) {
+	h := trace.NewErrorHandler(nil)
+	if h == nil {
+		t.Fatal("should return non-nil handler")
+	}
+	if !h.Enabled(context.Background(), slog.LevelError) {
+	}
+
+	err := h.Handle(context.Background(), slog.NewRecord(
+		time.Now(), slog.LevelError, "test", 0,
+	))
+	if err != nil {
+		t.Errorf("DiscardHandler should not error: %v", err)
+	}
+}
+
+// F1+F5 integration: WithCancelCause + FromContext preserves cause
+func TestFromContextWithTimeoutCause(t *testing.T) {
+	cause := errors.New("db timeout")
+	ctx, cancel := trace.WithTimeoutCause(context.Background(), 10*time.Millisecond, cause)
+	defer cancel()
+
+	<-ctx.Done()
+	err := trace.FromContext(ctx)
+
+	if !trace.IsTimeout(err) && !trace.IsCanceled(err) {
+		t.Error("should be timeout or canceled")
+	}
+	if !strings.Contains(err.Error(), "db timeout") {
+		t.Errorf("cause should be preserved, got: %s", err.Error())
 	}
 }

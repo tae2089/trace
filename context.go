@@ -3,6 +3,7 @@ package trace
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 type contextKey string
@@ -87,7 +88,9 @@ func WrapContext(ctx context.Context, err error, msg ...string) error {
 	return wrapped
 }
 
-// FromContext checks for context errors and wraps them appropriately
+// FromContext checks for context errors and wraps them appropriately.
+// Uses context.Cause (Go 1.20+) to capture the cancellation cause when available,
+// preserving the original reason for cancellation rather than just context.Canceled.
 func FromContext(ctx context.Context) error {
 	err := ctx.Err()
 	if err == nil {
@@ -96,10 +99,16 @@ func FromContext(ctx context.Context) error {
 
 	frame := captureFrame(2)
 
+	// Prefer context.Cause over ctx.Err() — it carries the original cancellation reason
+	inner := context.Cause(ctx)
+	if inner == nil {
+		inner = err
+	}
+
 	if errors.Is(err, context.Canceled) {
 		return &CanceledError{
 			TraceError: &TraceError{
-				Err:    err,
+				Err:    inner,
 				Frames: Frames{frame},
 				Fields: contextFieldsToMap(ctx),
 			},
@@ -109,7 +118,7 @@ func FromContext(ctx context.Context) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return &TimeoutError{
 			TraceError: &TraceError{
-				Err:    err,
+				Err:    inner,
 				Frames: Frames{frame},
 				Fields: contextFieldsToMap(ctx),
 			},
@@ -117,7 +126,7 @@ func FromContext(ctx context.Context) error {
 	}
 
 	return &TraceError{
-		Err:    err,
+		Err:    inner,
 		Frames: Frames{frame},
 		Fields: contextFieldsToMap(ctx),
 	}
@@ -233,4 +242,29 @@ func WrapIfContextDone(ctx context.Context, err error) error {
 	default:
 		return WrapContext(ctx, err)
 	}
+}
+
+// DetachedContext returns a context that carries the parent's values
+// but is not canceled when the parent is canceled (Go 1.21+).
+// Useful for background cleanup or logging that should outlive the request.
+func DetachedContext(ctx context.Context) context.Context {
+	return context.WithoutCancel(ctx)
+}
+
+// OnCancel registers fn to run after the context is canceled (Go 1.21+).
+// Returns a stop function that prevents fn from running if called before cancellation.
+func (c *Contextualizer) OnCancel(fn func()) func() bool {
+	return context.AfterFunc(c.ctx, fn)
+}
+
+// WithCancelCause returns a context with a CancelCauseFunc (Go 1.20+).
+// The cause can later be retrieved via context.Cause(ctx).
+func WithCancelCause(parent context.Context) (context.Context, context.CancelCauseFunc) {
+	return context.WithCancelCause(parent)
+}
+
+// WithTimeoutCause returns a context that is canceled after the given duration
+// with the specified cause error (Go 1.21+).
+func WithTimeoutCause(parent context.Context, d time.Duration, cause error) (context.Context, context.CancelFunc) {
+	return context.WithTimeoutCause(parent, d, cause)
 }
