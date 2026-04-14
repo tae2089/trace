@@ -3,7 +3,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/yourusername/trace.svg)](https://pkg.go.dev/github.com/yourusername/trace)
 [![Go Report Card](https://goreportcard.com/badge/github.com/yourusername/trace)](https://goreportcard.com/report/github.com/yourusername/trace)
 
-A modern error handling package for Go, inspired by [gravitational/trace](https://github.com/gravitational/trace) but upgraded for Go 1.21+ with:
+A modern error handling package for Go, inspired by [gravitational/trace](https://github.com/gravitational/trace) but upgraded for Go 1.25+ with:
 
 - 🔍 **Stack traces** - Know exactly where errors originate
 - 🏷️ **Typed errors** - NotFound, BadParameter, AccessDenied, etc.
@@ -11,7 +11,8 @@ A modern error handling package for Go, inspired by [gravitational/trace](https:
 - 🔗 **Full errors.Is/As support** - Compatible with Go 1.13+ error handling
 - 🧬 **Generics** - Result types, pipelines, and type-safe operations
 - 🌐 **HTTP utilities** - Middleware, error responses, status code mapping
-- 📦 **Context integration** - Trace IDs, fields, and context-aware wrapping
+- 📦 **Context integration** - Trace IDs, fields, cancel cause, detached contexts
+- 🔄 **Error chain iterator** - `for e := range trace.Errors(err)` (Go 1.23+)
 
 ## Installation
 
@@ -162,6 +163,9 @@ logger.Error("operation failed", trace.SlogError(err))
 // Use the error handler for automatic extraction
 handler := trace.NewErrorHandler(slog.NewJSONHandler(os.Stdout, nil))
 logger := slog.New(handler)
+
+// Passing nil uses slog.DiscardHandler — safe for tests or optional logging
+discardHandler := trace.NewErrorHandler(nil)
 ```
 
 ### HTTP Utilities
@@ -203,7 +207,8 @@ ctx = trace.ContextWithField(ctx, "user_id", userID)
 err := trace.WrapContext(ctx, dbErr, "query failed")
 // err now contains trace_id and user_id in fields
 
-// Check context errors
+// Check context errors — FromContext uses context.Cause to preserve the
+// original cancellation reason (e.g., the error passed to CancelCauseFunc)
 if err := trace.FromContext(ctx); err != nil {
     if trace.IsCanceled(err) {
         // Handle cancellation
@@ -212,6 +217,28 @@ if err := trace.FromContext(ctx); err != nil {
         // Handle timeout
     }
 }
+
+// Cancel with cause — the cause is preserved through FromContext
+ctx, cancel := trace.WithCancelCause(parentCtx)
+cancel(errors.New("shutdown requested"))
+err := trace.FromContext(ctx) // inner error is "shutdown requested", not generic "context canceled"
+
+// Timeout with cause
+ctx, cancel := trace.WithTimeoutCause(parentCtx, 5*time.Second, errors.New("slow query"))
+defer cancel()
+// if timeout fires, FromContext(ctx) wraps "slow query" as a TimeoutError
+
+// Detached context — carries values but not cancellation
+// Useful for background goroutines that should outlive the request
+detached := trace.DetachedContext(ctx)
+go cleanup(detached) // won't be canceled when parent ctx is canceled
+
+// Cancel callback — run a function when context is canceled
+c := trace.NewContextualizer(ctx)
+stop := c.OnCancel(func() {
+    releaseResource()
+})
+// call stop() to prevent the callback if no longer needed
 ```
 
 ### Generic Result Type
@@ -289,6 +316,25 @@ if trace.IsNotFound(combined) { /* at least one is NotFound */ }
 
 // Get most severe HTTP status
 statusCode := trace.GetHTTPStatusCode(combined)
+```
+
+### Error Chain Iterator (Go 1.23+)
+
+```go
+// Iterate over the entire error chain using range-over-func
+err := trace.Wrap(trace.Wrap(dbErr, "repo"), "service")
+
+for e := range trace.Errors(err) {
+    fmt.Println(e)
+}
+
+// Works with AggregateError — traverses all branches
+agg := trace.Aggregate(err1, err2, err3)
+for e := range trace.Errors(agg) {
+    if trace.IsNotFound(e) {
+        // found a NotFound somewhere in the tree
+    }
+}
 ```
 
 ### Debug Output
@@ -425,15 +471,26 @@ This package is mostly API-compatible with gravitational/trace. Main differences
 
 ## Requirements
 
-- Go 1.21+ (for `log/slog`)
-- Go 1.20+ (for `errors.Join` support in `Aggregate`)
-- Go 1.18+ (for generics)
+- Go 1.25+ (module requirement in `go.mod`)
+- Key feature minimum versions:
+  - `iter.Seq` / `for range N`: Go 1.23+
+  - `context.WithoutCancel`, `context.AfterFunc`, `context.WithTimeoutCause`: Go 1.21+
+  - `slog.DiscardHandler`: Go 1.24+
+  - `log/slog`: Go 1.21+
+  - `errors.Join` (`Aggregate`): Go 1.20+
+  - Generics: Go 1.18+
 
 ## Changelog
 
-### v1.0.1 (2026-01-25)
+### v1.1.0
 
-- **Fixed**: Printf formatting directive warnings in `http.go` by using explicit `fmt.Sprintf` for formatted messages in `Timeout` and `ConnectionProblem` calls
+- **Added**: `Errors(err) iter.Seq[error]` — range-based error chain iterator (Go 1.23+)
+- **Added**: `DetachedContext(ctx)` — `context.WithoutCancel` wrapper for cancel-free child contexts
+- **Added**: `Contextualizer.OnCancel(fn)` — `context.AfterFunc` wrapper for cancel callbacks
+- **Added**: `WithCancelCause(ctx)` / `WithTimeoutCause(ctx, d, cause)` — context cause wrappers
+- **Changed**: `FromContext` now uses `context.Cause` to preserve the original cancellation reason
+- **Changed**: `NewErrorHandler(nil)` uses `slog.DiscardHandler` instead of panicking
+- **Changed**: Benchmarks use `for range N` (Go 1.22+)
 
 ### v1.0.2 (2026-01-25)
 
