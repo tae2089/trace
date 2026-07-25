@@ -3,6 +3,7 @@
   "files": [
     "context.go.md",
     "errors.go.md",
+    "example/client.go.md",
     "example/main.go.md",
     "generics.go.md",
     "http.go.md",
