@@ -1,5 +1,6 @@
 // Package trace provides enhanced error handling with stack traces,
 // structured logging support, and full compatibility with Go 1.20+ error handling.
+// @index Core error wrapping, stack capture, and structured error inspection APIs.
 package trace
 
 import (
@@ -14,6 +15,7 @@ import (
 	"strings"
 )
 
+// @intent describe one recorded call site so errors and logs can point back to their origin.
 // Frame represents a single stack frame
 type Frame struct {
 	Function string `json:"function"`
@@ -21,14 +23,19 @@ type Frame struct {
 	Line     int    `json:"line"`
 }
 
+// @intent render a single frame in a compact file-line-function format for debugging output.
+// @ensures returns a string containing the file name, line number, and function name.
 // String returns a human-readable representation of the frame
 func (f Frame) String() string {
 	return fmt.Sprintf("%s:%d %s", f.File, f.Line, f.Function)
 }
 
+// @intent represent an ordered stack trace that can be rendered or serialized with an error.
 // Frames is a slice of stack frames
 type Frames []Frame
 
+// @intent render the recorded stack trace in call-order for compact error messages.
+// @ensures returns an empty string when no frames are present.
 // String returns a human-readable representation of all frames
 func (fs Frames) String() string {
 	if len(fs) == 0 {
@@ -48,6 +55,7 @@ func (fs Frames) String() string {
 	return b.String()
 }
 
+// @intent serve as the canonical trace-aware error wrapper carrying cause, message, frames, and structured fields.
 // TraceError is the core error type that captures stack traces
 type TraceError struct {
 	// Original error being wrapped
@@ -60,6 +68,8 @@ type TraceError struct {
 	Fields map[string]any
 }
 
+// @intent produce the primary human-readable message for traced errors and their wrapped causes.
+// @ensures includes frame and cause information when available.
 // Error implements the error interface
 func (e *TraceError) Error() string {
 	var b strings.Builder
@@ -83,11 +93,15 @@ func (e *TraceError) Error() string {
 	return b.String()
 }
 
+// @intent expose the wrapped cause so traced errors participate in standard Go error traversal.
+// @ensures returns the original wrapped error.
 // Unwrap implements the errors.Unwrap interface for Go 1.13+
 func (e *TraceError) Unwrap() error {
 	return e.Err
 }
 
+// @intent support concise and verbose formatting styles for traced errors.
+// @ensures %+v output includes stack frames and structured fields when present.
 // Format implements fmt.Formatter for customizable output
 func (e *TraceError) Format(s fmt.State, verb rune) {
 	switch verb {
@@ -115,6 +129,8 @@ func (e *TraceError) Format(s fmt.State, verb rune) {
 	}
 }
 
+// @intent serialize traced errors into structured slog fields without losing cause or stack context.
+// @ensures includes message, cause, trace, and fields only when those values are present.
 // LogValue implements slog.LogValuer for structured logging.
 // Schema: {"message":..., "cause":..., "trace":[{"file":..., "line":..., "func":...}], "fields":{...}}
 func (e *TraceError) LogValue() slog.Value {
@@ -137,6 +153,8 @@ func (e *TraceError) LogValue() slog.Value {
 	return slog.GroupValue(attrs...)
 }
 
+// @intent convert recorded frames into a JSON-friendly structure for structured logging output.
+// @ensures preserves file, line, and function data for each frame.
 func framesToSerializable(frames Frames) []map[string]any {
 	result := make([]map[string]any, len(frames))
 	for i, f := range frames {
@@ -149,6 +167,8 @@ func framesToSerializable(frames Frames) []map[string]any {
 	return result
 }
 
+// @intent capture the caller information that anchors trace output to a concrete source location.
+// @ensures returns an empty frame when runtime caller information is unavailable.
 // captureFrame captures a single stack frame at the given skip level
 func captureFrame(skip int) Frame {
 	pc, file, line, ok := runtime.Caller(skip)
@@ -169,6 +189,10 @@ func captureFrame(skip int) Frame {
 	}
 }
 
+// @intent preserve the original error while adding call-site debugging context.
+// @domainRule typed errors stay discoverable through the Err chain for errors.Is and errors.As.
+// @ensures prepends the current call site to any existing trace frames on the returned error.
+// @ensures returns nil unchanged when no source error is provided.
 // Wrap wraps an error with stack trace information.
 // If err is nil, Wrap returns nil.
 // Wrap always creates a new TraceError, preserving the original error
@@ -198,6 +222,9 @@ func Wrap(err error, msg ...string) error {
 	}
 }
 
+// @intent preserve the original error while adding formatted debugging context.
+// @domainRule typed errors stay discoverable through the Err chain for errors.Is and errors.As.
+// @ensures returns nil unchanged when no source error is provided.
 // Wrapf wraps an error with stack trace and a formatted message.
 func Wrapf(err error, format string, args ...any) error {
 	if err == nil {
@@ -206,6 +233,8 @@ func Wrapf(err error, format string, args ...any) error {
 	return wrapInternal(err, fmt.Sprintf(format, args...), captureFrame(2))
 }
 
+// @intent share the common TraceError wrapping path used by formatted and typed error helpers.
+// @ensures prepends the supplied frame to any existing trace frames.
 func wrapInternal(err error, msg string, frame Frame) error {
 	var existingFrames Frames
 	var te *TraceError
@@ -221,6 +250,10 @@ func wrapInternal(err error, msg string, frame Frame) error {
 	}
 }
 
+// @intent enrich an error with structured diagnostics that can flow into logs and HTTP responses.
+// @domainRule field attachment must not discard the wrapped error chain.
+// @mutates adds key-value metadata to the returned TraceError fields map.
+// @ensures returns nil unchanged when no source error is provided.
 // WrapWithFields wraps an error with stack trace and structured fields
 func WrapWithFields(err error, fields map[string]any, msg ...string) error {
 	if err == nil {
@@ -236,6 +269,9 @@ func WrapWithFields(err error, fields map[string]any, msg ...string) error {
 	return wrapped
 }
 
+// @intent create a fresh traceable application error at the current call site.
+// @ensures records the current call site as the first trace frame.
+// @ensures returns a TraceError with initialized fields storage.
 // New creates a new error with stack trace
 func New(msg string) error {
 	frame := captureFrame(2)
@@ -246,6 +282,9 @@ func New(msg string) error {
 	}
 }
 
+// @intent create a traceable error from formatted application context.
+// @ensures records the current call site as the first trace frame.
+// @ensures returns a TraceError with initialized fields storage.
 // Errorf creates a new error with formatted message and stack trace
 func Errorf(format string, args ...any) error {
 	frame := captureFrame(2)
@@ -256,6 +295,8 @@ func Errorf(format string, args ...any) error {
 	}
 }
 
+// @intent normalize mixed message-and-arguments inputs into one human-readable error message.
+// @ensures returns an empty string when no message arguments are supplied.
 // formatMessage formats message and args similar to fmt.Sprintf
 func formatMessage(msgAndArgs ...any) string {
 	if len(msgAndArgs) == 0 {
@@ -276,6 +317,8 @@ func formatMessage(msgAndArgs ...any) string {
 	return fmt.Sprint(msgAndArgs...)
 }
 
+// @intent expose captured stack frames for diagnostics without leaking mutable internal state.
+// @ensures returns a defensive copy of the stored frames when trace data exists.
 // GetFrames extracts frames from an error if available.
 // Returns a copy of the frames to prevent external mutation.
 func GetFrames(err error) Frames {
@@ -288,6 +331,8 @@ func GetFrames(err error) Frames {
 	return nil
 }
 
+// @intent expose structured trace metadata for logging, transport, or inspection layers.
+// @ensures returns a defensive copy of the stored fields when trace data exists.
 // GetFields extracts fields from an error if available.
 // Returns a copy of the fields to prevent external mutation.
 func GetFields(err error) map[string]any {
@@ -298,6 +343,10 @@ func GetFields(err error) map[string]any {
 	return nil
 }
 
+// @intent attach one diagnostic attribute without mutating the original error instance.
+// @domainRule built-in trace wrapper types are preserved when replacing the inner TraceError.
+// @mutates adds or replaces a single field on the returned error copy.
+// @ensures returns nil unchanged when no source error is provided.
 // WithField adds a field to the error for structured logging.
 // It returns a new wrapper error with the field added, preserving the original error immutably.
 func WithField(err error, key string, value any) error {
@@ -321,6 +370,10 @@ func WithField(err error, key string, value any) error {
 	return wrapped
 }
 
+// @intent attach multiple diagnostic attributes without mutating the original error instance.
+// @domainRule later field values override earlier values for the same key.
+// @mutates merges the provided fields into the returned error copy.
+// @ensures returns nil unchanged when no source error is provided.
 func WithFields(err error, fields map[string]any) error {
 	if err == nil {
 		return nil
@@ -346,6 +399,8 @@ func WithFields(err error, fields map[string]any) error {
 	return wrapped
 }
 
+// @intent duplicate a TraceError so field updates can preserve immutable error semantics.
+// @ensures returns a copy with duplicated frames and fields.
 func cloneTraceError(te *TraceError) *TraceError {
 	return &TraceError{
 		Err:     te.Err,
@@ -355,6 +410,8 @@ func cloneTraceError(te *TraceError) *TraceError {
 	}
 }
 
+// @intent swap the inner TraceError while preserving known wrapper types around it.
+// @domainRule built-in typed wrappers are recreated so errors.Is and errors.As continue to work.
 func replaceTraceError(err error, original *TraceError, replacement *TraceError) error {
 	if err == original {
 		return replacement
@@ -376,6 +433,10 @@ func replaceTraceError(err error, original *TraceError, replacement *TraceError)
 	case *NotImplementedError:
 		if e.TraceError == original {
 			return &NotImplementedError{TraceError: replacement}
+		}
+	case *UnauthenticatedError:
+		if e.TraceError == original {
+			return &UnauthenticatedError{TraceError: replacement}
 		}
 	case *AccessDeniedError:
 		if e.TraceError == original {
@@ -410,6 +471,8 @@ func replaceTraceError(err error, original *TraceError, replacement *TraceError)
 	return replacement
 }
 
+// @intent defensively copy structured error fields before mutation or external exposure.
+// @ensures returns a new map containing every existing field.
 func copyFields(src map[string]any) map[string]any {
 	dst := make(map[string]any, len(src)+1)
 	for k, v := range src {
@@ -418,6 +481,9 @@ func copyFields(src map[string]any) map[string]any {
 	return dst
 }
 
+// @intent render a full developer-facing report for nested and aggregated error chains.
+// @domainRule aggregate errors must include every branch in the rendered report.
+// @ensures returns an empty string when no error is provided.
 // DebugReport returns a detailed report of the error chain
 func DebugReport(err error) string {
 	if err == nil {
@@ -433,6 +499,8 @@ func DebugReport(err error) string {
 	return b.String()
 }
 
+// @intent recursively expand an error tree into the developer-facing debug report.
+// @ensures traverses both single-cause chains and aggregate branches.
 func debugReportWalk(b *strings.Builder, err error, depth int) {
 	if err == nil {
 		return
@@ -470,6 +538,9 @@ func debugReportWalk(b *strings.Builder, err error, depth int) {
 	}
 }
 
+// @intent extract the safest high-level message to show outside debugging channels.
+// @domainRule prefer explicit TraceError messages before falling back to wrapped causes.
+// @ensures returns an empty string when no error is provided.
 // UserMessage returns a user-friendly error message without stack traces
 func UserMessage(err error) string {
 	if err == nil {
@@ -489,6 +560,9 @@ func UserMessage(err error) string {
 	return err.Error()
 }
 
+// @intent iterate every error reachable from wrapped and aggregated trace errors.
+// @domainRule aggregate branches are traversed recursively, not flattened into a single message.
+// @ensures yields each reachable error once per traversal path until the consumer stops.
 // Errors returns an iterator over the error chain (Go 1.23+).
 // It yields each error in the chain by following Unwrap() error and
 // recursively traversing Unwrap() []error (e.g., AggregateError).
@@ -498,6 +572,8 @@ func Errors(err error) iter.Seq[error] {
 	}
 }
 
+// @intent recursively traverse every reachable error in a chain or aggregate until the consumer stops.
+// @ensures returns false as soon as the yield function asks traversal to stop.
 func errorsWalk(err error, yield func(error) bool) bool {
 	if err == nil {
 		return true

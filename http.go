@@ -1,3 +1,4 @@
+// @index HTTP adapters that translate trace errors into API responses, middleware behavior, and client-side classifications.
 package trace
 
 import (
@@ -9,44 +10,143 @@ import (
 	"net/http"
 )
 
-// ErrorResponse represents a structured JSON error response
+// @intent give clients a stable machine-readable classification independent of HTTP status text.
+// ErrorCode is a stable machine-readable HTTP error classification.
+type ErrorCode string
+
+const (
+	// CodeBadRequest identifies invalid client input.
+	CodeBadRequest ErrorCode = "bad_request"
+	// CodeUnauthenticated identifies a missing or invalid authentication identity.
+	CodeUnauthenticated ErrorCode = "unauthenticated"
+	// CodeAccessDenied identifies an authenticated caller without permission.
+	CodeAccessDenied ErrorCode = "access_denied"
+	// CodeNotFound identifies a missing resource.
+	CodeNotFound ErrorCode = "not_found"
+	// CodeAlreadyExists identifies a duplicate resource.
+	CodeAlreadyExists ErrorCode = "already_exists"
+	// CodeConflict identifies a state conflict.
+	CodeConflict ErrorCode = "conflict"
+	// CodeLimitExceeded identifies a rate or quota limit.
+	CodeLimitExceeded ErrorCode = "limit_exceeded"
+	// CodeCanceled identifies a canceled request.
+	CodeCanceled ErrorCode = "canceled"
+	// CodeNotImplemented identifies unavailable functionality.
+	CodeNotImplemented ErrorCode = "not_implemented"
+	// CodeUnavailable identifies a transiently unavailable dependency.
+	CodeUnavailable ErrorCode = "unavailable"
+	// CodeTimeout identifies a timed-out operation.
+	CodeTimeout ErrorCode = "timeout"
+	// CodeInternal identifies a failure that is intentionally hidden from clients.
+	CodeInternal ErrorCode = "internal"
+)
+
+// @intent carry only validated status, semantic code, and client-safe message across an HTTP boundary.
+// HTTPError is the safe client-facing representation of an error.
+type HTTPError struct {
+	Status  int
+	Code    ErrorCode
+	Message string
+}
+
+// @intent let application-owned error types opt into explicit safe HTTP classification.
+// HTTPErrorProvider lets custom errors define a safe HTTP representation.
+type HTTPErrorProvider interface {
+	error
+	HTTPError() HTTPError
+}
+
+// @intent classify an error chain into a validated client-safe HTTP representation.
+// @domainRule invalid classifications become internal errors and every 5xx message is sanitized.
+// @ensures returns the zero value for nil and never derives a message from an outer trace wrapper.
+// ToHTTPError returns the safe HTTP representation for err.
+func ToHTTPError(err error) HTTPError {
+	if err == nil {
+		return HTTPError{}
+	}
+
+	var provider HTTPErrorProvider
+	if !errors.As(err, &provider) {
+		return internalHTTPError()
+	}
+
+	result := provider.HTTPError()
+	if result.Status < http.StatusBadRequest || result.Status > 599 || result.Code == "" {
+		return internalHTTPError()
+	}
+	if result.Status >= http.StatusInternalServerError {
+		result.Message = "internal server error"
+	}
+	return result
+}
+
+// @intent centralize the generic fallback used whenever a failure cannot be exposed safely.
+func internalHTTPError() HTTPError {
+	return HTTPError{
+		Status:  http.StatusInternalServerError,
+		Code:    CodeInternal,
+		Message: "internal server error",
+	}
+}
+
+// @intent group safe client fields under one stable JSON error envelope.
+// ErrorBody is the stable machine-readable body nested under the error key.
+type ErrorBody struct {
+	Code      ErrorCode `json:"code"`
+	Message   string    `json:"message"`
+	RequestID string    `json:"request_id,omitempty"`
+}
+
+// @intent define the client-facing error payload returned by HTTP helpers in this package.
+// ErrorResponse represents a structured JSON error response.
 type ErrorResponse struct {
-	Error   string         `json:"error"`
-	Code    int            `json:"code"`
-	Message string         `json:"message,omitempty"`
-	TraceID string         `json:"trace_id,omitempty"`
-	Details map[string]any `json:"details,omitempty"`
+	Error ErrorBody `json:"error"`
 }
 
-// WriteError writes an error response to the HTTP response writer
-func WriteError(w http.ResponseWriter, err error) {
-	WriteErrorWithLogger(w, err, nil)
+// @intent build a framework-neutral response from the safe HTTP classification.
+// @domainRule request IDs are caller-supplied and trace fields or details are never copied from err.
+// @ensures returns zero values for nil errors.
+// ErrorResponseFor returns the status and safe response body for err.
+func ErrorResponseFor(err error, requestID string) (status int, response ErrorResponse) {
+	httpError := ToHTTPError(err)
+	if httpError.Status == 0 {
+		return 0, ErrorResponse{}
+	}
+
+	return httpError.Status, ErrorResponse{
+		Error: ErrorBody{
+			Code:      httpError.Code,
+			Message:   httpError.Message,
+			RequestID: requestID,
+		},
+	}
 }
 
-// WriteErrorWithLogger writes an error response and logs it
+// @intent expose a simple entry point for converting domain errors into HTTP responses.
+// @sideEffect writes status code, headers, and a JSON body to the response writer.
+// @ensures returns without writing anything when the input error is nil.
+// WriteError writes a safe error response without logging.
+func WriteError(w http.ResponseWriter, err error, requestID string) error {
+	statusCode, resp := ErrorResponseFor(err, requestID)
+	if statusCode == 0 {
+		return nil
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	return json.NewEncoder(w).Encode(resp)
+}
+
+// @intent retain the legacy opt-in logging adapter while directing new callers to application-owned logging.
+// WriteErrorWithLogger writes an error response and logs it.
+//
+// Deprecated: applications should log request completion and call WriteError separately.
 func WriteErrorWithLogger(w http.ResponseWriter, err error, logger *slog.Logger) {
 	if err == nil {
 		return
 	}
 
-	statusCode := GetHTTPStatusCode(err)
-
-	resp := ErrorResponse{
-		Error:   http.StatusText(statusCode),
-		Code:    statusCode,
-		Message: UserMessage(err),
-	}
-
-	// Add trace ID if available in fields
-	if fields := GetFields(err); fields != nil {
-		if traceID, ok := fields["trace_id"].(string); ok {
-			resp.TraceID = traceID
-		}
-		// Only include safe details
-		if details, ok := fields["details"].(map[string]any); ok {
-			resp.Details = details
-		}
-	}
+	statusCode := ToHTTPError(err).Status
 
 	// Log the full error with stack trace
 	if logger != nil {
@@ -56,22 +156,39 @@ func WriteErrorWithLogger(w http.ResponseWriter, err error, logger *slog.Logger)
 		)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
-	if encErr := json.NewEncoder(w).Encode(resp); encErr != nil && logger != nil {
+	if encErr := WriteError(w, err, ""); encErr != nil && logger != nil {
 		logger.Error("failed to encode error response", "encode_error", encErr)
 	}
 }
 
+// @intent let HTTP handlers return errors directly so middleware can centralize response rendering.
 // ErrorHandlerFunc is a function that handles HTTP requests and may return an error
 type ErrorHandlerFunc func(w http.ResponseWriter, r *http.Request) error
 
+// @intent adapt error-returning handlers into standard net/http handlers.
+// @ensures renders handler errors through the logger-free safe response writer.
 // ErrorMiddleware converts an ErrorHandlerFunc to a standard http.HandlerFunc
 func ErrorMiddleware(h ErrorHandlerFunc) http.HandlerFunc {
-	return ErrorMiddlewareWithLogger(h, nil)
+	return func(w http.ResponseWriter, r *http.Request) {
+		err := h(w, r)
+		if err == nil {
+			return
+		}
+
+		err = WithFields(err, map[string]any{
+			"method": r.Method,
+			"path":   r.URL.Path,
+		})
+		_ = WriteError(w, err, "")
+	}
 }
 
-// ErrorMiddlewareWithLogger converts an ErrorHandlerFunc to http.HandlerFunc with logging
+// @intent normalize handler failures into traced HTTP responses enriched with request metadata.
+// @sideEffect attaches method and path fields before writing the HTTP error response.
+// @ensures successful handlers pass through without writing an additional error response.
+// ErrorMiddlewareWithLogger converts an ErrorHandlerFunc to http.HandlerFunc with logging.
+//
+// Deprecated: applications should own request logging and use ErrorMiddleware or ErrorResponseFor.
 func ErrorMiddlewareWithLogger(h ErrorHandlerFunc, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		err := h(w, r)
@@ -86,7 +203,12 @@ func ErrorMiddlewareWithLogger(h ErrorHandlerFunc, logger *slog.Logger) http.Han
 	}
 }
 
-// RecoverMiddleware recovers from panics and converts them to errors
+// @intent prevent panics from escaping the HTTP boundary and turn them into traceable server errors.
+// @domainRule recovered panics always return HTTP 500 with a generic client-facing message.
+// @sideEffect recovers panics, logs structured diagnostics, and writes a fallback JSON response.
+// RecoverMiddleware recovers from panics and converts them to errors.
+//
+// Deprecated: applications should own panic recovery and request-completion logging.
 func RecoverMiddleware(next http.Handler, logger *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
@@ -114,9 +236,10 @@ func RecoverMiddleware(next http.Handler, logger *slog.Logger) http.Handler {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusInternalServerError)
 				if encErr := json.NewEncoder(w).Encode(ErrorResponse{
-					Error:   "Internal Server Error",
-					Code:    http.StatusInternalServerError,
-					Message: "An unexpected error occurred",
+					Error: ErrorBody{
+						Code:    CodeInternal,
+						Message: "internal server error",
+					},
 				}); encErr != nil && logger != nil {
 					logger.Error("failed to encode panic response", "encode_error", encErr)
 				}
@@ -127,6 +250,9 @@ func RecoverMiddleware(next http.Handler, logger *slog.Logger) http.Handler {
 	})
 }
 
+// @intent classify non-success upstream HTTP responses into trace error categories.
+// @domainRule 2xx responses are not errors, while known status codes map to typed trace errors.
+// @ensures records the current call site as the first trace frame and stores upstream status metadata in error fields.
 // FromHTTPResponse creates an appropriate error from an HTTP response
 func FromHTTPResponse(resp *http.Response, body []byte) error {
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
@@ -155,7 +281,9 @@ func FromHTTPResponse(resp *http.Response, body []byte) error {
 		return &ConflictError{TraceError: te}
 	case http.StatusBadRequest:
 		return &BadParameterError{TraceError: te}
-	case http.StatusUnauthorized, http.StatusForbidden:
+	case http.StatusUnauthorized:
+		return &UnauthenticatedError{TraceError: te}
+	case http.StatusForbidden:
 		return &AccessDeniedError{TraceError: te}
 	case http.StatusTooManyRequests:
 		return &LimitExceededError{TraceError: te}
@@ -171,11 +299,16 @@ func FromHTTPResponse(resp *http.Response, body []byte) error {
 	}
 }
 
+// @intent test whether an error chain resolves to a specific HTTP status mapping.
+// @ensures delegates status resolution to GetHTTPStatusCode.
 // IsHTTPError checks if an error corresponds to a specific HTTP status code
 func IsHTTPError(err error, statusCode int) bool {
 	return GetHTTPStatusCode(err) == statusCode
 }
 
+// @intent override or attach explicit HTTP status semantics to an existing error chain.
+// @domainRule returns nil unchanged when the source error is nil.
+// @mutates adds http_status metadata to the returned traced wrapper.
 // WrapHTTPError wraps an error with HTTP status code information
 func WrapHTTPError(err error, statusCode int, msg ...string) error {
 	if err == nil {
@@ -199,20 +332,29 @@ func WrapHTTPError(err error, statusCode int, msg ...string) error {
 	}
 }
 
+// @intent carry an explicit HTTP status override for errors that do not map to one of the standard typed categories.
 type httpStatusError struct {
 	*TraceError
 	statusCode int
 }
 
+// @intent expose the explicit status override carried by this internal HTTP error wrapper.
 func (e *httpStatusError) HTTPStatusCode() int { return e.statusCode }
-func (e *httpStatusError) Error() string       { return e.TraceError.Error() }
-func (e *httpStatusError) Unwrap() error       { return e.TraceError }
 
+// @intent delegate user-facing string rendering to the embedded TraceError.
+func (e *httpStatusError) Error() string { return e.TraceError.Error() }
+
+// @intent expose the embedded TraceError to standard Go error traversal.
+func (e *httpStatusError) Unwrap() error { return e.TraceError }
+
+// @intent wrap http.Client so transport failures come back as trace-classified errors.
 // Client is an HTTP client that wraps errors with trace information
 type Client struct {
 	*http.Client
 }
 
+// @intent provide an HTTP client wrapper that returns trace-classified transport failures.
+// @ensures falls back to http.DefaultClient when no custom client is supplied.
 // NewClient creates a new trace-aware HTTP client
 func NewClient(client *http.Client) *Client {
 	if client == nil {
@@ -221,6 +363,9 @@ func NewClient(client *http.Client) *Client {
 	return &Client{Client: client}
 }
 
+// @intent classify outbound HTTP transport failures into timeout or connection problem errors.
+// @domainRule deadline exceeded maps to Timeout and other transport failures map to ConnectionProblem.
+// @sideEffect executes the underlying HTTP request through the wrapped client.
 // Do executes the request and wraps any errors with trace information
 func (c *Client) Do(req *http.Request) (*http.Response, error) {
 	resp, err := c.Client.Do(req)
