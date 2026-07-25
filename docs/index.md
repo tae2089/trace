@@ -1,7 +1,7 @@
 <!-- generated-by: code-context-graph docs -->
 # Code Context Index
 
-Generated: 2026-07-25 16:19
+Generated: 2026-07-25 20:13
 
 ## Files
 
@@ -11,7 +11,7 @@ Generated: 2026-07-25 16:19
 | [errors.go](errors.go.md) | 110 | Typed error categories, retryability rules, and HTTP status mapping for trace errors. |
 | [example/main.go](example/main.go.md) | 6 | Example HTTP application demonstrating application-owned logging, safe HTTP errors, and layered wrapping. |
 | [generics.go](generics.go.md) | 28 | Generic Result and Pipeline helpers for composing trace-aware success and failure flows. |
-| [http.go](http.go.md) | 24 | HTTP adapters that translate trace errors into API responses, middleware behavior, and client-side classifications. |
+| [http.go](http.go.md) | 27 | HTTP adapters that translate trace errors into API responses, middleware behavior, and client-side classifications. |
 | [slog.go](slog.go.md) | 14 | slog integration for serializing trace errors and automatically expanding error attributes in log records. |
 | [trace.go](trace.go.md) | 30 | Core error wrapping, stack capture, and structured error inspection APIs. |
 
@@ -57,26 +57,26 @@ Generated: 2026-07-25 16:19
 | [ContextWithTraceID](context.go.md#contextwithtraceid) | function | context.go |
 | [DebugReport](trace.go.md#debugreport) | function | trace.go |
 | [DetachedContext](context.go.md#detachedcontext) | function | context.go |
-| [Do](context.go.md#do) | function | context.go |
 | [Do](http.go.md#do) | function | http.go |
+| [Do](context.go.md#do) | function | context.go |
 | [DoValue](context.go.md#dovalue) | function | context.go |
 | [Enabled](slog.go.md#enabled) | function | slog.go |
 | [Err](generics.go.md#err) | function | generics.go |
 | [ErrMsg](generics.go.md#errmsg) | function | generics.go |
 | [Error](errors.go.md#error) | function | errors.go |
-| [Error](context.go.md#error) | function | context.go |
-| [Error](trace.go.md#error) | function | trace.go |
 | [Error](errors.go.md#error) | function | errors.go |
 | [Error](errors.go.md#error) | function | errors.go |
 | [Error](generics.go.md#error) | function | generics.go |
+| [Error](errors.go.md#error) | function | errors.go |
+| [Error](errors.go.md#error) | function | errors.go |
+| [Error](errors.go.md#error) | function | errors.go |
+| [Error](errors.go.md#error) | function | errors.go |
+| [Error](errors.go.md#error) | function | errors.go |
+| [Error](errors.go.md#error) | function | errors.go |
 | [Error](http.go.md#error) | function | http.go |
+| [Error](context.go.md#error) | function | context.go |
 | [Error](errors.go.md#error) | function | errors.go |
-| [Error](errors.go.md#error) | function | errors.go |
-| [Error](errors.go.md#error) | function | errors.go |
-| [Error](errors.go.md#error) | function | errors.go |
-| [Error](errors.go.md#error) | function | errors.go |
-| [Error](errors.go.md#error) | function | errors.go |
-| [Error](errors.go.md#error) | function | errors.go |
+| [Error](trace.go.md#error) | function | trace.go |
 | [Error](errors.go.md#error) | function | errors.go |
 | [ErrorMiddleware](http.go.md#errormiddleware) | function | http.go |
 | [ErrorMiddlewareWithLogger](http.go.md#errormiddlewarewithlogger) | function | http.go |
@@ -93,26 +93,26 @@ Generated: 2026-07-25 16:19
 | [GetHTTPStatusCode](errors.go.md#gethttpstatuscode) | function | errors.go |
 | [HTTPError](errors.go.md#httperror) | function | errors.go |
 | [HTTPError](errors.go.md#httperror) | function | errors.go |
-| [HTTPError](errors.go.md#httperror) | function | errors.go |
-| [HTTPError](errors.go.md#httperror) | function | errors.go |
-| [HTTPError](errors.go.md#httperror) | function | errors.go |
-| [HTTPError](errors.go.md#httperror) | function | errors.go |
-| [HTTPError](errors.go.md#httperror) | function | errors.go |
 | [HTTPError](context.go.md#httperror) | function | context.go |
 | [HTTPError](errors.go.md#httperror) | function | errors.go |
 | [HTTPError](errors.go.md#httperror) | function | errors.go |
 | [HTTPError](errors.go.md#httperror) | function | errors.go |
 | [HTTPError](errors.go.md#httperror) | function | errors.go |
+| [HTTPError](errors.go.md#httperror) | function | errors.go |
+| [HTTPError](errors.go.md#httperror) | function | errors.go |
+| [HTTPError](errors.go.md#httperror) | function | errors.go |
+| [HTTPError](errors.go.md#httperror) | function | errors.go |
+| [HTTPError](errors.go.md#httperror) | function | errors.go |
+| [HTTPStatusCode](errors.go.md#httpstatuscode) | function | errors.go |
+| [HTTPStatusCode](errors.go.md#httpstatuscode) | function | errors.go |
+| [HTTPStatusCode](errors.go.md#httpstatuscode) | function | errors.go |
+| [HTTPStatusCode](context.go.md#httpstatuscode) | function | context.go |
 | [HTTPStatusCode](errors.go.md#httpstatuscode) | function | errors.go |
 | [HTTPStatusCode](errors.go.md#httpstatuscode) | function | errors.go |
 | [HTTPStatusCode](errors.go.md#httpstatuscode) | function | errors.go |
 | [HTTPStatusCode](errors.go.md#httpstatuscode) | function | errors.go |
 | [HTTPStatusCode](errors.go.md#httpstatuscode) | function | errors.go |
 | [HTTPStatusCode](http.go.md#httpstatuscode) | function | http.go |
-| [HTTPStatusCode](errors.go.md#httpstatuscode) | function | errors.go |
-| [HTTPStatusCode](context.go.md#httpstatuscode) | function | context.go |
-| [HTTPStatusCode](errors.go.md#httpstatuscode) | function | errors.go |
-| [HTTPStatusCode](errors.go.md#httpstatuscode) | function | errors.go |
 | [HTTPStatusCode](errors.go.md#httpstatuscode) | function | errors.go |
 | [HTTPStatusCode](errors.go.md#httpstatuscode) | function | errors.go |
 | [HTTPStatusCode](errors.go.md#httpstatuscode) | function | errors.go |
@@ -150,8 +150,8 @@ Generated: 2026-07-25 16:19
 | [LimitExceeded](errors.go.md#limitexceeded) | function | errors.go |
 | [LogDebug](slog.go.md#logdebug) | function | slog.go |
 | [LogError](slog.go.md#logerror) | function | slog.go |
-| [LogValue](errors.go.md#logvalue) | function | errors.go |
 | [LogValue](trace.go.md#logvalue) | function | trace.go |
+| [LogValue](errors.go.md#logvalue) | function | errors.go |
 | [LogWarn](slog.go.md#logwarn) | function | slog.go |
 | [Map](generics.go.md#map) | function | generics.go |
 | [MapErr](generics.go.md#maperr) | function | generics.go |
@@ -166,6 +166,7 @@ Generated: 2026-07-25 16:19
 | [NotImplemented](errors.go.md#notimplemented) | function | errors.go |
 | [Ok](generics.go.md#ok) | function | generics.go |
 | [OnCancel](context.go.md#oncancel) | function | context.go |
+| [ReadErrorResponse](http.go.md#readerrorresponse) | function | http.go |
 | [Recover](generics.go.md#recover) | function | generics.go |
 | [RecoverMiddleware](http.go.md#recovermiddleware) | function | http.go |
 | [RecoverWith](generics.go.md#recoverwith) | function | generics.go |
@@ -184,16 +185,16 @@ Generated: 2026-07-25 16:19
 | [Try](generics.go.md#try) | function | generics.go |
 | [Unauthenticated](errors.go.md#unauthenticated) | function | errors.go |
 | [Unwrap](errors.go.md#unwrap) | function | errors.go |
+| [Unwrap](generics.go.md#unwrap) | function | generics.go |
 | [Unwrap](errors.go.md#unwrap) | function | errors.go |
+| [Unwrap](errors.go.md#unwrap) | function | errors.go |
+| [Unwrap](context.go.md#unwrap) | function | context.go |
 | [Unwrap](errors.go.md#unwrap) | function | errors.go |
 | [Unwrap](trace.go.md#unwrap) | function | trace.go |
 | [Unwrap](errors.go.md#unwrap) | function | errors.go |
-| [Unwrap](errors.go.md#unwrap) | function | errors.go |
-| [Unwrap](errors.go.md#unwrap) | function | errors.go |
 | [Unwrap](http.go.md#unwrap) | function | http.go |
-| [Unwrap](generics.go.md#unwrap) | function | generics.go |
 | [Unwrap](errors.go.md#unwrap) | function | errors.go |
-| [Unwrap](context.go.md#unwrap) | function | context.go |
+| [Unwrap](errors.go.md#unwrap) | function | errors.go |
 | [Unwrap](errors.go.md#unwrap) | function | errors.go |
 | [Unwrap](errors.go.md#unwrap) | function | errors.go |
 | [Unwrap](errors.go.md#unwrap) | function | errors.go |
@@ -229,6 +230,7 @@ Generated: 2026-07-25 16:19
 | [copyFields](trace.go.md#copyfields) | function | trace.go |
 | [debugReportWalk](trace.go.md#debugreportwalk) | function | trace.go |
 | [errorCause](slog.go.md#errorcause) | function | slog.go |
+| [errorCodeMatchesStatus](http.go.md#errorcodematchesstatus) | function | http.go |
 | [errorsWalk](trace.go.md#errorswalk) | function | trace.go |
 | [formatMessage](trace.go.md#formatmessage) | function | trace.go |
 | [framesToSerializable](trace.go.md#framestoserializable) | function | trace.go |
@@ -238,6 +240,7 @@ Generated: 2026-07-25 16:19
 | [internalHTTPError](http.go.md#internalhttperror) | function | http.go |
 | [logAtLevel](slog.go.md#logatlevel) | function | slog.go |
 | [main](example/main.go.md#main) | function | example/main.go |
+| [newReadErrorResponseTrace](http.go.md#newreaderrorresponsetrace) | function | http.go |
 | [replaceTraceError](trace.go.md#replacetraceerror) | function | trace.go |
 | [repoFindUser](example/main.go.md#repofinduser) | function | example/main.go |
 | [wrapInternal](trace.go.md#wrapinternal) | function | trace.go |

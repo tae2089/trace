@@ -1,7 +1,7 @@
 # Trace - Modern Go Error Handling
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/yourusername/trace.svg)](https://pkg.go.dev/github.com/yourusername/trace)
-[![Go Report Card](https://goreportcard.com/badge/github.com/yourusername/trace)](https://goreportcard.com/report/github.com/yourusername/trace)
+[![Go Reference](https://pkg.go.dev/badge/github.com/tae2089/trace.svg)](https://pkg.go.dev/github.com/tae2089/trace)
+[![Go Report Card](https://goreportcard.com/badge/github.com/tae2089/trace)](https://goreportcard.com/report/github.com/tae2089/trace)
 
 A modern error handling package for Go, inspired by [gravitational/trace](https://github.com/gravitational/trace) but upgraded for Go 1.25+ with:
 
@@ -26,9 +26,9 @@ go get github.com/tae2089/trace
 package main
 
 import (
-    "errors"
     "fmt"
-    "github.com/yourusername/trace"
+
+    "github.com/tae2089/trace"
 )
 
 func main() {
@@ -43,12 +43,14 @@ func main() {
 }
 
 func fetchUser(id string) error {
-    user, err := queryDatabase(id)
+    _, err := queryDatabase(id)
     if err != nil {
-        return trace.Wrap(err, "failed to fetch user %s", id)
+        return trace.Wrapf(err, "failed to fetch user %s", id)
     }
     return nil
 }
+
+type User struct{}
 
 func queryDatabase(id string) (*User, error) {
     // Simulate not found
@@ -80,7 +82,7 @@ err := trace.Wrap(originalErr)
 err := trace.Wrap(originalErr, "operation failed")
 
 // Wrap with formatted message
-err := trace.Wrap(originalErr, "failed to process user %s", userID)
+err := trace.Wrapf(originalErr, "failed to process user %s", userID)
 
 // Create new error with stack trace
 err := trace.New("something went wrong")
@@ -224,14 +226,53 @@ messages are never copied into the response. All 5xx messages are normalized to
 `RecoverMiddleware(next, logger)` are deprecated. Applications should decide
 logging level, duration, route, and response-size policy.
 
+Clients using this response contract can safely restore built-in typed errors:
+
 ```go
-// Create error from HTTP response
-resp, _ := http.Get("https://api.example.com/users/123")
-body, _ := io.ReadAll(resp.Body)
-if err := trace.FromHTTPResponse(resp, body); err != nil {
-    // err is typed (NotFound, BadParameter, etc.) based on status code
+resp, err := http.Get("https://api.example.com/users/123")
+if err != nil {
+    return err
+}
+defer resp.Body.Close()
+
+body, err := io.ReadAll(resp.Body)
+if err != nil {
+    return err
+}
+if err := trace.ReadErrorResponse(resp.StatusCode, body); err != nil {
+    if trace.IsNotFound(err) {
+        // error.code was "not_found"
+    }
+    return err
 }
 ```
+
+`ReadErrorResponse` reads only `error.code`, `error.message`, and `request_id`
+from the public envelope. It creates a new local trace and never deserializes
+remote causes, fields, details, frames, or an internal `TraceError`. The HTTP
+status must agree with the code; malformed envelopes, unknown/custom codes, and
+status/code mismatches become a generic internal error without retaining the raw
+response body. Authentication, authorization, cancellation, and all 5xx
+messages are normalized again while decoding.
+
+| `error.code` | HTTP status | Restored predicate |
+| --- | ---: | --- |
+| `bad_request` | 400 | `IsBadParameter` |
+| `unauthenticated` | 401 | `IsUnauthenticated` |
+| `access_denied` | 403 | `IsAccessDenied` |
+| `not_found` | 404 | `IsNotFound` |
+| `already_exists` | 409 | `IsAlreadyExists` |
+| `conflict` | 409 | `IsConflict` |
+| `limit_exceeded` | 429 | `IsLimitExceeded` |
+| `canceled` | 499 | `IsCanceled` |
+| `not_implemented` | 501 | `IsNotImplemented` |
+| `unavailable` | 503 | `IsConnectionProblem` |
+| `timeout` | 504 | `IsTimeout` |
+| `internal` | 5xx | Generic internal error |
+
+`FromHTTPResponse` remains available for legacy status/plain-text responses. It
+classifies by status and retains the response body in the developer-facing
+error, so prefer `ReadErrorResponse` for the safe JSON contract above.
 
 ### Context Integration
 
@@ -494,17 +535,18 @@ func middleware(next http.Handler) http.Handler {
 
 ## Migration from gravitational/trace
 
-This package is mostly API-compatible with gravitational/trace. Main differences:
+This package is inspired by gravitational/trace, but it is not a drop-in
+replacement. Important differences:
 
-| gravitational/trace  | This package                            |
-| -------------------- | --------------------------------------- |
-| `trace.Traces` embed | Not needed - use `*TraceError` directly |
-| `trace.OrigError()`  | Use `errors.Unwrap()` or `errors.Is/As` |
-| Manual `SetTrace`    | Automatic via `Wrap()`                  |
-| -                    | `slog` integration                      |
-| -                    | Generic `Result` type                   |
-| -                    | `Pipeline` pattern                      |
-| -                    | Context integration                     |
+| gravitational/trace | This package |
+| --- | --- |
+| `trace.Traces` embed | Use `*TraceError` directly |
+| `trace.OrigError()` | Use `errors.Unwrap()` or `errors.Is/As` |
+| Manual `SetTrace` | Automatic via `Wrap()` |
+| `WriteError` serializes trace internals | `WriteError` emits only the public `ErrorResponse` envelope |
+| `ReadError` deserializes remote trace internals | `ReadErrorResponse` creates a new local typed error from the public code |
+| Status-driven HTTP reconstruction | Code + status validation distinguishes categories sharing a status |
+| No equivalent | `slog`, generics, pipelines, and context integration |
 
 ## Requirements
 
@@ -518,6 +560,12 @@ This package is mostly API-compatible with gravitational/trace. Main differences
   - Generics: Go 1.18+
 
 ## Changelog
+
+### Unreleased
+
+- **Added**: Safe `HTTPError`, `ErrorResponseFor`, and `WriteError` response contract
+- **Added**: `ReadErrorResponse(statusCode, body)` for safe code-based typed error restoration
+- **Changed**: Authentication and authorization now use distinct 401/403 categories and stable codes
 
 ### v1.1.0
 

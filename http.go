@@ -250,10 +250,137 @@ func RecoverMiddleware(next http.Handler, logger *slog.Logger) http.Handler {
 	})
 }
 
-// @intent classify non-success upstream HTTP responses into trace error categories.
+// @intent restore typed trace semantics from the public ErrorResponse envelope without deserializing internal trace data.
+// @domainRule HTTP 2xx and 3xx statuses are not errors.
+// @domainRule malformed, unknown, or status-mismatched responses fail closed without retaining the raw body.
+// ReadErrorResponse converts a public HTTP error response into a trace error.
+func ReadErrorResponse(statusCode int, responseBody []byte) error {
+	if statusCode >= http.StatusOK && statusCode < http.StatusBadRequest {
+		return nil
+	}
+
+	frame := captureFrame(2)
+	var response ErrorResponse
+	if err := json.Unmarshal(responseBody, &response); err != nil {
+		return newReadErrorResponseTrace(frame, statusCode, "", "invalid error response")
+	}
+	if response.Error.Code == "" ||
+		response.Error.Message == "" ||
+		!errorCodeMatchesStatus(response.Error.Code, statusCode) {
+		return newReadErrorResponseTrace(
+			frame,
+			statusCode,
+			response.Error.RequestID,
+			"invalid error response",
+		)
+	}
+
+	message := response.Error.Message
+	switch {
+	case response.Error.Code == CodeUnauthenticated:
+		message = "authentication required"
+	case response.Error.Code == CodeAccessDenied:
+		message = "access denied"
+	case response.Error.Code == CodeCanceled:
+		message = "request canceled"
+	case statusCode >= http.StatusInternalServerError:
+		message = "internal server error"
+	}
+
+	traceError := newReadErrorResponseTrace(
+		frame,
+		statusCode,
+		response.Error.RequestID,
+		message,
+	)
+	switch response.Error.Code {
+	case CodeBadRequest:
+		return &BadParameterError{TraceError: traceError}
+	case CodeUnauthenticated:
+		return &UnauthenticatedError{TraceError: traceError}
+	case CodeAccessDenied:
+		return &AccessDeniedError{TraceError: traceError}
+	case CodeNotFound:
+		return &NotFoundError{TraceError: traceError}
+	case CodeAlreadyExists:
+		return &AlreadyExistsError{TraceError: traceError}
+	case CodeConflict:
+		return &ConflictError{TraceError: traceError}
+	case CodeLimitExceeded:
+		return &LimitExceededError{TraceError: traceError}
+	case CodeCanceled:
+		return &CanceledError{TraceError: traceError}
+	case CodeNotImplemented:
+		return &NotImplementedError{TraceError: traceError}
+	case CodeUnavailable:
+		return &ConnectionProblemError{TraceError: traceError}
+	case CodeTimeout:
+		return &TimeoutError{TraceError: traceError}
+	case CodeInternal:
+		return traceError
+	default:
+		return newReadErrorResponseTrace(
+			frame,
+			statusCode,
+			response.Error.RequestID,
+			"invalid error response",
+		)
+	}
+}
+
+// @intent validate the public code and HTTP status as one coherent wire contract.
+func errorCodeMatchesStatus(code ErrorCode, statusCode int) bool {
+	switch code {
+	case CodeBadRequest:
+		return statusCode == http.StatusBadRequest
+	case CodeUnauthenticated:
+		return statusCode == http.StatusUnauthorized
+	case CodeAccessDenied:
+		return statusCode == http.StatusForbidden
+	case CodeNotFound:
+		return statusCode == http.StatusNotFound
+	case CodeAlreadyExists, CodeConflict:
+		return statusCode == http.StatusConflict
+	case CodeLimitExceeded:
+		return statusCode == http.StatusTooManyRequests
+	case CodeCanceled:
+		return statusCode == 499
+	case CodeNotImplemented:
+		return statusCode == http.StatusNotImplemented
+	case CodeUnavailable:
+		return statusCode == http.StatusServiceUnavailable
+	case CodeTimeout:
+		return statusCode == http.StatusGatewayTimeout
+	case CodeInternal:
+		return statusCode >= http.StatusInternalServerError && statusCode <= 599
+	default:
+		return false
+	}
+}
+
+// @intent construct a fresh local trace from only the safe response metadata allowed across the HTTP boundary.
+func newReadErrorResponseTrace(
+	frame Frame,
+	statusCode int,
+	requestID string,
+	message string,
+) *TraceError {
+	fields := map[string]any{"status_code": statusCode}
+	if requestID != "" {
+		fields["request_id"] = requestID
+	}
+	return &TraceError{
+		Message: message,
+		Frames:  Frames{frame},
+		Fields:  fields,
+	}
+}
+
+// @intent retain legacy status-based classification for plain-text upstream responses.
 // @domainRule 2xx responses are not errors, while known status codes map to typed trace errors.
 // @ensures records the current call site as the first trace frame and stores upstream status metadata in error fields.
-// FromHTTPResponse creates an appropriate error from an HTTP response
+// FromHTTPResponse creates an appropriate error from an HTTP response.
+// It retains body in the developer-facing error; prefer ReadErrorResponse for the safe JSON envelope.
 func FromHTTPResponse(resp *http.Response, body []byte) error {
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return nil
