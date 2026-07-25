@@ -94,6 +94,7 @@ err := trace.Errorf("failed to process %d items", count)
 err := trace.NotFound("user %s not found", userID)
 err := trace.AlreadyExists("email already registered")
 err := trace.BadParameter("invalid email format")
+err := trace.Unauthenticated("invalid bearer token")
 err := trace.AccessDenied("insufficient permissions")
 err := trace.Conflict("version mismatch")
 err := trace.LimitExceeded("rate limit exceeded")
@@ -107,6 +108,7 @@ err := trace.WrapAccessDenied(err, "permission check failed")
 
 // Check error types (works through wrapped errors)
 if trace.IsNotFound(err) { /* handle 404 */ }
+if trace.IsUnauthenticated(err) { /* handle 401 */ }
 if trace.IsAccessDenied(err) { /* handle 403 */ }
 if trace.IsRetryable(err) { /* retry the operation */ }
 
@@ -171,23 +173,58 @@ discardHandler := trace.NewErrorHandler(nil)
 ### HTTP Utilities
 
 ```go
-// Error middleware
-http.HandleFunc("/users/{id}", trace.ErrorMiddleware(func(w http.ResponseWriter, r *http.Request) error {
-    user, err := service.GetUser(r.PathValue("id"))
-    if err != nil {
-        return err // Automatically converts to proper HTTP response
+// The application owns request logging; trace only classifies and renders.
+func Handle(fn trace.ErrorHandlerFunc) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        if err := fn(w, r); err != nil {
+            httpErr := trace.ToHTTPError(err)
+            logger.Error("request failed",
+                trace.SlogError(err),
+                slog.Int("status_code", httpErr.Status),
+                slog.String("method", r.Method),
+                slog.String("path", r.URL.Path),
+            )
+
+            requestID := r.Header.Get("X-Request-ID")
+            if writeErr := trace.WriteError(w, err, requestID); writeErr != nil {
+                logger.Error("failed to write error response", "error", writeErr)
+            }
+        }
     }
-    json.NewEncoder(w).Encode(user)
-    return nil
-}))
+}
 
-// With logging
-logger := slog.Default()
-http.HandleFunc("/users/{id}", trace.ErrorMiddlewareWithLogger(handler, logger))
+http.Handle("/users/{id}", Handle(getUserHandler))
+```
 
-// Panic recovery
-http.Handle("/", trace.RecoverMiddleware(mux, logger))
+The response contains only stable client-safe fields:
 
+```json
+{
+  "error": {
+    "code": "not_found",
+    "message": "user not found",
+    "request_id": "01KREQUEST"
+  }
+}
+```
+
+Framework adapters such as Gin can use `ErrorResponseFor` without writing through
+`net/http`:
+
+```go
+status, response := trace.ErrorResponseFor(err, requestID)
+```
+
+`request_id` is supplied explicitly and is separate from internal `trace_id`
+fields. Error fields, details, causes, stack frames, and outer `trace.Wrap`
+messages are never copied into the response. All 5xx messages are normalized to
+`internal server error`.
+
+`WriteErrorWithLogger`, `ErrorMiddlewareWithLogger`, and
+`RecoverMiddleware(next, logger)` are deprecated. Applications should decide
+logging level, duration, route, and response-size policy.
+
+```go
 // Create error from HTTP response
 resp, _ := http.Get("https://api.example.com/users/123")
 body, _ := io.ReadAll(resp.Body)

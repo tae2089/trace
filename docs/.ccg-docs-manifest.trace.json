@@ -1,0 +1,13 @@
+{
+  "namespace": "trace",
+  "files": [
+    "context.go.md",
+    "errors.go.md",
+    "example/main.go.md",
+    "generics.go.md",
+    "http.go.md",
+    "slog.go.md",
+    "trace.go.md",
+    "index.md"
+  ]
+}

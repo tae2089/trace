@@ -199,8 +199,8 @@ func TestHTTPMiddleware(t *testing.T) {
 
 	var resp trace.ErrorResponse
 	json.NewDecoder(rec.Body).Decode(&resp)
-	if resp.Code != http.StatusNotFound {
-		t.Error("response code mismatch")
+	if resp.Error.Code != trace.CodeNotFound {
+		t.Error("response error code mismatch")
 	}
 }
 

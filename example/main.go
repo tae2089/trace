@@ -1,3 +1,4 @@
+// @index Example HTTP application demonstrating application-owned logging, safe HTTP errors, and layered wrapping.
 package main
 
 import (
@@ -10,9 +11,9 @@ import (
 	"github.com/tae2089/trace"
 )
 
+// @intent demonstrate how an application owns request logging while trace renders safe error responses.
 func main() {
-	// Create a new HTTP handler with trace middleware
-	http.Handle("/users/{id}", trace.ErrorMiddleware(getUserHandler))
+	http.Handle("/users/{id}", handle(getUserHandler))
 
 	// Start the server
 	fmt.Println("Server running on :8080")
@@ -21,6 +22,27 @@ func main() {
 	}
 }
 
+// @intent keep request logging policy in the application and delegate only safe response rendering to trace.
+func handle(handler trace.ErrorHandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := handler(w, r); err != nil {
+			httpError := trace.ToHTTPError(err)
+			slog.Error("Request failed",
+				trace.SlogError(err),
+				slog.Int("status_code", httpError.Status),
+				slog.String("method", r.Method),
+				slog.String("path", r.URL.Path),
+			)
+
+			requestID := r.Header.Get("X-Request-ID")
+			if writeErr := trace.WriteError(w, err, requestID); writeErr != nil {
+				slog.Error("Failed to write error response", "error", writeErr)
+			}
+		}
+	}
+}
+
+// @intent show how handlers return errors to the application-owned HTTP adapter.
 // getUserHandler handles GET /users/{id} requests
 func getUserHandler(w http.ResponseWriter, r *http.Request) error {
 	// Extract user ID from URL
@@ -40,6 +62,7 @@ func getUserHandler(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+// @intent demonstrate service-layer wrapping that adds user-specific context before errors cross boundaries.
 // getUserService retrieves a user by ID
 func getUserService(userID string) (*User, error) {
 	// Call repository layer
@@ -50,6 +73,7 @@ func getUserService(userID string) (*User, error) {
 	return user, nil
 }
 
+// @intent demonstrate repository-layer translation from storage failures into typed trace errors.
 // repoFindUser simulates database query
 func repoFindUser(userID string) (*User, error) {
 	// Simulate database error
@@ -60,6 +84,7 @@ func repoFindUser(userID string) (*User, error) {
 	return &User{ID: userID}, nil
 }
 
+// @intent provide a minimal response model for the trace package usage example.
 // User represents a user entity
 type User struct {
 	ID   string `json:"id"`
