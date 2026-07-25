@@ -70,18 +70,36 @@ ErrorMiddlewareWithLogger converts an ErrorHandlerFunc to http.HandlerFunc with 
 RecoverMiddleware recovers from panics and converts them to errors.
 - **Calls:** Error, Error, SlogError, Wrap, Errorf, WithFields
 
+### ReadErrorResponse
+- **Lines:** 257–329
+- **Intent:** restore typed trace semantics from the public ErrorResponse envelope without deserializing internal trace data.
+- **Domain Rules:**
+  - HTTP 2xx and 3xx statuses are not errors.
+  - malformed, unknown, or status-mismatched responses fail closed without retaining the raw body.
+ReadErrorResponse converts a public HTTP error response into a trace error.
+- **Calls:** errorCodeMatchesStatus, newReadErrorResponseTrace, newReadErrorResponseTrace, newReadErrorResponseTrace, newReadErrorResponseTrace, captureFrame
+
+### errorCodeMatchesStatus
+- **Lines:** 332–359
+- **Intent:** validate the public code and HTTP status as one coherent wire contract.
+
+### newReadErrorResponseTrace
+- **Lines:** 362–377
+- **Intent:** construct a fresh local trace from only the safe response metadata allowed across the HTTP boundary.
+
 ### FromHTTPResponse
-- **Lines:** 257–300
-- **Intent:** classify non-success upstream HTTP responses into trace error categories.
+- **Lines:** 384–427
+- **Intent:** retain legacy status-based classification for plain-text upstream responses.
 - **Domain Rules:**
   - 2xx responses are not errors, while known status codes map to typed trace errors.
 - **Ensures:**
   - records the current call site as the first trace frame and stores upstream status metadata in error fields.
-FromHTTPResponse creates an appropriate error from an HTTP response
+FromHTTPResponse creates an appropriate error from an HTTP response.
+It retains body in the developer-facing error; prefer ReadErrorResponse for the safe JSON envelope.
 - **Calls:** captureFrame
 
 ### IsHTTPError
-- **Lines:** 305–307
+- **Lines:** 432–434
 - **Intent:** test whether an error chain resolves to a specific HTTP status mapping.
 - **Ensures:**
   - delegates status resolution to GetHTTPStatusCode.
@@ -89,7 +107,7 @@ IsHTTPError checks if an error corresponds to a specific HTTP status code
 - **Calls:** GetHTTPStatusCode
 
 ### WrapHTTPError
-- **Lines:** 313–333
+- **Lines:** 440–460
 - **Intent:** override or attach explicit HTTP status semantics to an existing error chain.
 - **Domain Rules:**
   - returns nil unchanged when the source error is nil.
@@ -98,27 +116,27 @@ WrapHTTPError wraps an error with HTTP status code information
 - **Calls:** wrapTypedInternal, captureFrame
 
 ### HTTPStatusCode
-- **Lines:** 342–342
+- **Lines:** 469–469
 - **Intent:** expose the explicit status override carried by this internal HTTP error wrapper.
 
 ### Error
-- **Lines:** 345–345
+- **Lines:** 472–472
 - **Intent:** delegate user-facing string rendering to the embedded TraceError.
 - **Calls:** Error
 
 ### Unwrap
-- **Lines:** 348–348
+- **Lines:** 475–475
 - **Intent:** expose the embedded TraceError to standard Go error traversal.
 
 ### NewClient
-- **Lines:** 359–364
+- **Lines:** 486–491
 - **Intent:** provide an HTTP client wrapper that returns trace-classified transport failures.
 - **Ensures:**
   - falls back to http.DefaultClient when no custom client is supplied.
 NewClient creates a new trace-aware HTTP client
 
 ### Do
-- **Lines:** 370–380
+- **Lines:** 497–507
 - **Intent:** classify outbound HTTP transport failures into timeout or connection problem errors.
 - **Domain Rules:**
   - deadline exceeded maps to Timeout and other transport failures map to ConnectionProblem.
@@ -144,11 +162,11 @@ ErrorBody is the stable machine-readable body nested under the error key.
 ErrorResponse represents a structured JSON error response.
 
 ### httpStatusError
-- **Lines:** 336–339
+- **Lines:** 463–466
 - **Intent:** carry an explicit HTTP status override for errors that do not map to one of the standard typed categories.
 
 ### Client
-- **Lines:** 352–354
+- **Lines:** 479–481
 - **Intent:** wrap http.Client so transport failures come back as trace-classified errors.
 Client is an HTTP client that wraps errors with trace information
 

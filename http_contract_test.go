@@ -369,3 +369,267 @@ func TestToHTTPErrorPreservesAggregateStatusPriority(t *testing.T) {
 		t.Fatalf("ToHTTPError() = %#v, want %#v", got, want)
 	}
 }
+
+func TestReadErrorResponseReturnsNilForNonErrorStatus(t *testing.T) {
+	for _, status := range []int{
+		http.StatusOK,
+		http.StatusNoContent,
+		http.StatusMovedPermanently,
+	} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			err := trace.ReadErrorResponse(status, []byte("not JSON"))
+			if err != nil {
+				t.Fatalf("ReadErrorResponse() error = %v, want nil", err)
+			}
+		})
+	}
+}
+
+func TestReadErrorResponseRoundTripsBuiltInCodes(t *testing.T) {
+	canceledContext, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	tests := []struct {
+		name      string
+		sourceErr error
+		matches   func(error) bool
+	}{
+		{name: "bad request", sourceErr: trace.BadParameter("invalid email"), matches: trace.IsBadParameter},
+		{name: "unauthenticated", sourceErr: trace.Unauthenticated("expired token"), matches: trace.IsUnauthenticated},
+		{name: "access denied", sourceErr: trace.AccessDenied("missing role"), matches: trace.IsAccessDenied},
+		{name: "not found", sourceErr: trace.NotFound("user not found"), matches: trace.IsNotFound},
+		{name: "already exists", sourceErr: trace.AlreadyExists("email exists"), matches: trace.IsAlreadyExists},
+		{name: "conflict", sourceErr: trace.Conflict("version mismatch"), matches: trace.IsConflict},
+		{name: "limit exceeded", sourceErr: trace.LimitExceeded("quota exceeded"), matches: trace.IsLimitExceeded},
+		{name: "canceled", sourceErr: trace.FromContext(canceledContext), matches: trace.IsCanceled},
+		{name: "not implemented", sourceErr: trace.NotImplemented("export unavailable"), matches: trace.IsNotImplemented},
+		{
+			name:      "unavailable",
+			sourceErr: trace.ConnectionProblem(errors.New("dial failed"), "database unavailable"),
+			matches:   trace.IsConnectionProblem,
+		},
+		{
+			name:      "timeout",
+			sourceErr: trace.Timeout(errors.New("deadline"), "inventory timed out"),
+			matches:   trace.IsTimeout,
+		},
+		{
+			name:      "internal",
+			sourceErr: errors.New("database password must remain hidden"),
+			matches: func(err error) bool {
+				return trace.ToHTTPError(err).Code == trace.CodeInternal
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status, response := trace.ErrorResponseFor(tt.sourceErr, "01KREQUEST")
+			body, err := json.Marshal(response)
+			if err != nil {
+				t.Fatalf("Marshal() error = %v", err)
+			}
+
+			gotErr := trace.ReadErrorResponse(status, body)
+			if gotErr == nil {
+				t.Fatal("ReadErrorResponse() error = nil")
+			}
+			if !tt.matches(gotErr) {
+				t.Fatalf("ReadErrorResponse() type = %T, predicate did not match", gotErr)
+			}
+			if got, want := trace.ToHTTPError(gotErr), trace.ToHTTPError(tt.sourceErr); got != want {
+				t.Fatalf("ToHTTPError() = %#v, want %#v", got, want)
+			}
+
+			fields := trace.GetFields(gotErr)
+			if got := fields["status_code"]; got != status {
+				t.Fatalf("status_code = %#v, want %d", got, status)
+			}
+			if got := fields["request_id"]; got != "01KREQUEST" {
+				t.Fatalf("request_id = %#v, want %q", got, "01KREQUEST")
+			}
+		})
+	}
+}
+
+func TestReadErrorResponseKeepsOnlySafeEnvelopeFields(t *testing.T) {
+	const secret = "database password=do-not-copy"
+	body := []byte(`{
+		"error": {
+			"code": "not_found",
+			"message": "user not found",
+			"request_id": "01KREQUEST",
+			"cause": "` + secret + `",
+			"details": {"table": "users"},
+			"trace": [{"file": "internal/repo.go"}]
+		},
+		"traces": [{"file": "internal/service.go"}],
+		"fields": {"trace_id": "must-not-copy"}
+	}`)
+
+	err := trace.ReadErrorResponse(http.StatusNotFound, body)
+	if !trace.IsNotFound(err) {
+		t.Fatalf("ReadErrorResponse() type = %T, want not found", err)
+	}
+	wantFields := map[string]any{
+		"status_code": http.StatusNotFound,
+		"request_id":  "01KREQUEST",
+	}
+	if got := trace.GetFields(err); !reflect.DeepEqual(got, wantFields) {
+		t.Fatalf("GetFields() = %#v, want %#v", got, wantFields)
+	}
+	for _, output := range []string{err.Error(), trace.DebugReport(err)} {
+		if strings.Contains(output, secret) ||
+			strings.Contains(output, "internal/repo.go") ||
+			strings.Contains(output, "must-not-copy") {
+			t.Fatalf("internal response field leaked in %q", output)
+		}
+	}
+}
+
+func TestReadErrorResponseNormalizesSensitiveMessages(t *testing.T) {
+	const secret = "token=do-not-expose"
+	tests := []struct {
+		name    string
+		status  int
+		code    trace.ErrorCode
+		want    string
+		matches func(error) bool
+	}{
+		{
+			name:    "unauthenticated",
+			status:  http.StatusUnauthorized,
+			code:    trace.CodeUnauthenticated,
+			want:    "authentication required",
+			matches: trace.IsUnauthenticated,
+		},
+		{
+			name:    "access denied",
+			status:  http.StatusForbidden,
+			code:    trace.CodeAccessDenied,
+			want:    "access denied",
+			matches: trace.IsAccessDenied,
+		},
+		{
+			name:    "canceled",
+			status:  499,
+			code:    trace.CodeCanceled,
+			want:    "request canceled",
+			matches: trace.IsCanceled,
+		},
+		{
+			name:    "not implemented",
+			status:  http.StatusNotImplemented,
+			code:    trace.CodeNotImplemented,
+			want:    "internal server error",
+			matches: trace.IsNotImplemented,
+		},
+		{
+			name:    "unavailable",
+			status:  http.StatusServiceUnavailable,
+			code:    trace.CodeUnavailable,
+			want:    "internal server error",
+			matches: trace.IsConnectionProblem,
+		},
+		{
+			name:    "timeout",
+			status:  http.StatusGatewayTimeout,
+			code:    trace.CodeTimeout,
+			want:    "internal server error",
+			matches: trace.IsTimeout,
+		},
+		{
+			name:   "internal",
+			status: http.StatusInternalServerError,
+			code:   trace.CodeInternal,
+			want:   "internal server error",
+			matches: func(err error) bool {
+				return trace.ToHTTPError(err).Code == trace.CodeInternal
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body, err := json.Marshal(trace.ErrorResponse{
+				Error: trace.ErrorBody{Code: tt.code, Message: secret},
+			})
+			if err != nil {
+				t.Fatalf("Marshal() error = %v", err)
+			}
+
+			gotErr := trace.ReadErrorResponse(tt.status, body)
+			if !tt.matches(gotErr) {
+				t.Fatalf("ReadErrorResponse() type = %T, predicate did not match", gotErr)
+			}
+			if got := trace.UserMessage(gotErr); got != tt.want {
+				t.Fatalf("UserMessage() = %q, want %q", got, tt.want)
+			}
+			if strings.Contains(gotErr.Error(), secret) ||
+				strings.Contains(trace.DebugReport(gotErr), secret) {
+				t.Fatalf("sensitive message leaked from %q", gotErr)
+			}
+		})
+	}
+}
+
+func TestReadErrorResponseFailsClosed(t *testing.T) {
+	const secret = "password=do-not-expose"
+	tests := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{name: "empty body", status: http.StatusBadRequest},
+		{name: "malformed JSON", status: http.StatusBadRequest, body: `{` + secret},
+		{
+			name:   "missing code",
+			status: http.StatusBadRequest,
+			body:   `{"error":{"message":"` + secret + `"}}`,
+		},
+		{
+			name:   "missing message",
+			status: http.StatusBadRequest,
+			body:   `{"error":{"code":"bad_request"}}`,
+		},
+		{
+			name:   "unknown code",
+			status: http.StatusTeapot,
+			body:   `{"error":{"code":"teapot","message":"` + secret + `","request_id":"01KREQUEST"}}`,
+		},
+		{
+			name:   "code and status mismatch",
+			status: http.StatusBadRequest,
+			body:   `{"error":{"code":"not_found","message":"` + secret + `"}}`,
+		},
+		{
+			name:   "trailing JSON",
+			status: http.StatusBadRequest,
+			body:   `{"error":{"code":"bad_request","message":"safe"}}{"secret":"` + secret + `"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := trace.ReadErrorResponse(tt.status, []byte(tt.body))
+			if err == nil {
+				t.Fatal("ReadErrorResponse() error = nil")
+			}
+			want := trace.HTTPError{
+				Status:  http.StatusInternalServerError,
+				Code:    trace.CodeInternal,
+				Message: "internal server error",
+			}
+			if got := trace.ToHTTPError(err); got != want {
+				t.Fatalf("ToHTTPError() = %#v, want %#v", got, want)
+			}
+			if got := trace.UserMessage(err); got != "invalid error response" {
+				t.Fatalf("UserMessage() = %q, want %q", got, "invalid error response")
+			}
+			if strings.Contains(err.Error(), secret) ||
+				strings.Contains(trace.DebugReport(err), secret) {
+				t.Fatalf("raw response leaked from %q", err)
+			}
+		})
+	}
+}
