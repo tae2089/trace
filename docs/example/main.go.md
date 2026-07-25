@@ -19,7 +19,7 @@
 - **Lines:** 47–63
 - **Intent:** show how handlers return errors to the application-owned HTTP adapter.
 getUserHandler handles GET /users/{id} requests
-- **Calls:** getUserService
+- **Calls:** getUserService, Wrap
 
 ### getUserService
 - **Lines:** 67–74

@@ -56,9 +56,9 @@ func getUserHandler(w http.ResponseWriter, r *http.Request) error {
 
 	// Return user data
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(user)
-
+	if err := json.NewEncoder(w).Encode(user); err != nil {
+		return trace.Wrap(err, "encode user response")
+	}
 	return nil
 }
 

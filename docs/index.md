@@ -1,7 +1,7 @@
 <!-- generated-by: code-context-graph docs -->
 # Code Context Index
 
-Generated: 2026-07-25 20:13
+Generated: 2026-07-25 20:29
 
 ## Files
 
@@ -9,6 +9,7 @@ Generated: 2026-07-25 20:13
 |------|---------|-------------|
 | [context.go](context.go.md) | 29 | Context helpers for propagating trace IDs, fields, and cancellation causes into trace errors. |
 | [errors.go](errors.go.md) | 110 | Typed error categories, retryability rules, and HTTP status mapping for trace errors. |
+| [example/client.go](example/client.go.md) | 1 | Client-side example for safely restoring typed trace errors from public HTTP error responses. |
 | [example/main.go](example/main.go.md) | 6 | Example HTTP application demonstrating application-owned logging, safe HTTP errors, and layered wrapping. |
 | [generics.go](generics.go.md) | 28 | Generic Result and Pipeline helpers for composing trace-aware success and failure flows. |
 | [http.go](http.go.md) | 27 | HTTP adapters that translate trace errors into API responses, middleware behavior, and client-side classifications. |
@@ -185,19 +186,19 @@ Generated: 2026-07-25 20:13
 | [Try](generics.go.md#try) | function | generics.go |
 | [Unauthenticated](errors.go.md#unauthenticated) | function | errors.go |
 | [Unwrap](errors.go.md#unwrap) | function | errors.go |
+| [Unwrap](errors.go.md#unwrap) | function | errors.go |
+| [Unwrap](errors.go.md#unwrap) | function | errors.go |
+| [Unwrap](errors.go.md#unwrap) | function | errors.go |
+| [Unwrap](http.go.md#unwrap) | function | http.go |
+| [Unwrap](trace.go.md#unwrap) | function | trace.go |
+| [Unwrap](errors.go.md#unwrap) | function | errors.go |
 | [Unwrap](generics.go.md#unwrap) | function | generics.go |
 | [Unwrap](errors.go.md#unwrap) | function | errors.go |
 | [Unwrap](errors.go.md#unwrap) | function | errors.go |
+| [Unwrap](errors.go.md#unwrap) | function | errors.go |
+| [Unwrap](errors.go.md#unwrap) | function | errors.go |
+| [Unwrap](errors.go.md#unwrap) | function | errors.go |
 | [Unwrap](context.go.md#unwrap) | function | context.go |
-| [Unwrap](errors.go.md#unwrap) | function | errors.go |
-| [Unwrap](trace.go.md#unwrap) | function | trace.go |
-| [Unwrap](errors.go.md#unwrap) | function | errors.go |
-| [Unwrap](http.go.md#unwrap) | function | http.go |
-| [Unwrap](errors.go.md#unwrap) | function | errors.go |
-| [Unwrap](errors.go.md#unwrap) | function | errors.go |
-| [Unwrap](errors.go.md#unwrap) | function | errors.go |
-| [Unwrap](errors.go.md#unwrap) | function | errors.go |
-| [Unwrap](errors.go.md#unwrap) | function | errors.go |
 | [Unwrap](errors.go.md#unwrap) | function | errors.go |
 | [UnwrapOr](generics.go.md#unwrapor) | function | generics.go |
 | [UnwrapOrElse](generics.go.md#unwraporelse) | function | generics.go |
@@ -209,8 +210,8 @@ Generated: 2026-07-25 20:13
 | [WithFields](trace.go.md#withfields) | function | trace.go |
 | [WithGroup](slog.go.md#withgroup) | function | slog.go |
 | [WithTimeoutCause](context.go.md#withtimeoutcause) | function | context.go |
-| [Wrap](trace.go.md#wrap) | function | trace.go |
 | [Wrap](context.go.md#wrap) | function | context.go |
+| [Wrap](trace.go.md#wrap) | function | trace.go |
 | [WrapAccessDenied](errors.go.md#wrapaccessdenied) | function | errors.go |
 | [WrapAlreadyExists](errors.go.md#wrapalreadyexists) | function | errors.go |
 | [WrapBadParameter](errors.go.md#wrapbadparameter) | function | errors.go |
@@ -232,6 +233,7 @@ Generated: 2026-07-25 20:13
 | [errorCause](slog.go.md#errorcause) | function | slog.go |
 | [errorCodeMatchesStatus](http.go.md#errorcodematchesstatus) | function | http.go |
 | [errorsWalk](trace.go.md#errorswalk) | function | trace.go |
+| [fetchUser](example/client.go.md#fetchuser) | function | example/client.go |
 | [formatMessage](trace.go.md#formatmessage) | function | trace.go |
 | [framesToSerializable](trace.go.md#framestoserializable) | function | trace.go |
 | [getUserHandler](example/main.go.md#getuserhandler) | function | example/main.go |
