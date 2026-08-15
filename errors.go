@@ -619,7 +619,7 @@ func IsRetryable(err error) bool {
 // Aggregate combines multiple errors into a single error using errors.Join (Go 1.20+)
 func Aggregate(errs ...error) error {
 	// Filter out nil errors
-	var nonNil []error
+	nonNil := make([]error, 0, len(errs))
 	for _, err := range errs {
 		if err != nil {
 			nonNil = append(nonNil, err)
