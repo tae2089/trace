@@ -2,7 +2,6 @@
 package trace
 
 import (
-	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -252,8 +251,7 @@ func (e *TimeoutError) Unwrap() error { return e.TraceError }
 func wrapTypedInternal(err error, msg string, frame Frame) *TraceError {
 	var existingFrames Frames
 	var existingFields map[string]any
-	var te *TraceError
-	if err != nil && errors.As(err, &te) {
+	if te := findTraceError(err); te != nil {
 		existingFrames = te.Frames
 		if len(te.Fields) > 0 {
 			existingFields = copyFields(te.Fields)
@@ -502,7 +500,7 @@ func IsNotFound(err error) bool {
 		return false
 	}
 	var e ErrorNotFound
-	return errors.As(err, &e) && e.IsNotFound()
+	return chainAs(err, &e) && e.IsNotFound()
 }
 
 // @intent detect duplicate-resource failures anywhere in an error chain.
@@ -513,7 +511,7 @@ func IsAlreadyExists(err error) bool {
 		return false
 	}
 	var e ErrorAlreadyExists
-	return errors.As(err, &e) && e.IsAlreadyExists()
+	return chainAs(err, &e) && e.IsAlreadyExists()
 }
 
 // @intent detect caller-input failures anywhere in an error chain.
@@ -524,7 +522,7 @@ func IsBadParameter(err error) bool {
 		return false
 	}
 	var e ErrorBadParameter
-	return errors.As(err, &e) && e.IsBadParameter()
+	return chainAs(err, &e) && e.IsBadParameter()
 }
 
 // @intent detect unsupported-operation failures anywhere in an error chain.
@@ -535,7 +533,7 @@ func IsNotImplemented(err error) bool {
 		return false
 	}
 	var e ErrorNotImplemented
-	return errors.As(err, &e) && e.IsNotImplemented()
+	return chainAs(err, &e) && e.IsNotImplemented()
 }
 
 // @intent detect authentication failures anywhere in an error chain.
@@ -546,7 +544,7 @@ func IsUnauthenticated(err error) bool {
 		return false
 	}
 	var e ErrorUnauthenticated
-	return errors.As(err, &e) && e.IsUnauthenticated()
+	return chainAs(err, &e) && e.IsUnauthenticated()
 }
 
 // @intent detect authorization failures anywhere in an error chain.
@@ -557,7 +555,7 @@ func IsAccessDenied(err error) bool {
 		return false
 	}
 	var e ErrorAccessDenied
-	return errors.As(err, &e) && e.IsAccessDenied()
+	return chainAs(err, &e) && e.IsAccessDenied()
 }
 
 // @intent detect state-conflict failures anywhere in an error chain.
@@ -568,7 +566,7 @@ func IsConflict(err error) bool {
 		return false
 	}
 	var e ErrorConflict
-	return errors.As(err, &e) && e.IsConflict()
+	return chainAs(err, &e) && e.IsConflict()
 }
 
 // @intent detect transient transport or infrastructure failures anywhere in an error chain.
@@ -579,7 +577,7 @@ func IsConnectionProblem(err error) bool {
 		return false
 	}
 	var e ErrorConnectionProblem
-	return errors.As(err, &e) && e.IsConnectionProblem()
+	return chainAs(err, &e) && e.IsConnectionProblem()
 }
 
 // @intent detect throttling or quota failures anywhere in an error chain.
@@ -590,7 +588,7 @@ func IsLimitExceeded(err error) bool {
 		return false
 	}
 	var e ErrorLimitExceeded
-	return errors.As(err, &e) && e.IsLimitExceeded()
+	return chainAs(err, &e) && e.IsLimitExceeded()
 }
 
 // @intent detect timeout failures anywhere in an error chain.
@@ -601,7 +599,7 @@ func IsTimeout(err error) bool {
 		return false
 	}
 	var e ErrorTimeout
-	return errors.As(err, &e) && e.IsTimeout()
+	return chainAs(err, &e) && e.IsTimeout()
 }
 
 // @intent detect failures that explicitly advertise retry-safe semantics.
@@ -612,7 +610,7 @@ func IsRetryable(err error) bool {
 		return false
 	}
 	var e ErrorRetryable
-	return errors.As(err, &e) && e.IsRetryable()
+	return chainAs(err, &e) && e.IsRetryable()
 }
 
 // @intent preserve multiple concurrent failures as one error value for later inspection.

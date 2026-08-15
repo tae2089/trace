@@ -211,7 +211,7 @@ func IsCanceled(err error) bool {
 		return false
 	}
 	var e ErrorCanceled
-	if errors.As(err, &e) && e.IsCanceled() {
+	if chainAs(err, &e) && e.IsCanceled() {
 		return true
 	}
 	return errors.Is(err, context.Canceled)

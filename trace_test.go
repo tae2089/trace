@@ -153,6 +153,42 @@ func TestFieldWritesOnFreshErrors(t *testing.T) {
 	})
 }
 
+// asRedirector only exposes its inner error through the As(any) bool hook,
+// never through Unwrap. Chain walking must honor it exactly like errors.As.
+type asRedirector struct{ inner error }
+
+func (a *asRedirector) Error() string { return "redirected: " + a.inner.Error() }
+
+func (a *asRedirector) As(target any) bool {
+	if p, ok := target.(*trace.ErrorNotFound); ok {
+		var e trace.ErrorNotFound
+		if errors.As(a.inner, &e) {
+			*p = e
+			return true
+		}
+	}
+	return false
+}
+
+func TestChainWalkingMatchesErrorsAsSemantics(t *testing.T) {
+	t.Run("honors As(any) bool", func(t *testing.T) {
+		err := &asRedirector{inner: trace.NotFound("user missing")}
+		if !trace.IsNotFound(err) {
+			t.Fatal("IsNotFound must honor a custom As method like errors.As does")
+		}
+	})
+
+	t.Run("traverses aggregate branches", func(t *testing.T) {
+		agg := trace.Aggregate(errors.New("plain"), trace.NotFound("gone"))
+		if !trace.IsNotFound(agg) {
+			t.Fatal("IsNotFound must find matches inside aggregate branches")
+		}
+		if trace.IsAccessDenied(agg) {
+			t.Fatal("IsAccessDenied must not match this aggregate")
+		}
+	})
+}
+
 // Example: With fields for structured logging
 func TestWithFields(t *testing.T) {
 	err := trace.NotFound("user not found")

@@ -214,8 +214,7 @@ func Wrap(err error, msg ...string) error {
 	}
 
 	var existingFrames Frames
-	var te *TraceError
-	if errors.As(err, &te) {
+	if te := findTraceError(err); te != nil {
 		existingFrames = te.Frames
 	}
 
@@ -241,8 +240,7 @@ func Wrapf(err error, format string, args ...any) error {
 // @ensures prepends the supplied frame to any existing trace frames.
 func wrapInternal(err error, msg string, frame Frame) error {
 	var existingFrames Frames
-	var te *TraceError
-	if errors.As(err, &te) {
+	if te := findTraceError(err); te != nil {
 		existingFrames = te.Frames
 	}
 
@@ -294,6 +292,68 @@ func Errorf(format string, args ...any) error {
 	}
 }
 
+// @intent walk an error tree with plain type assertions so hot paths avoid the reflection cost of errors.As.
+// @domainRule matches errors.As semantics: direct match first, then a custom As(any) bool hook,
+// then single-cause and aggregate traversal in order.
+// @ensures returns false without touching target when no match exists in the tree.
+func chainAs[T any](err error, target *T) bool {
+	for err != nil {
+		if v, ok := err.(T); ok {
+			*target = v
+			return true
+		}
+		if x, ok := err.(interface{ As(any) bool }); ok && x.As(target) {
+			return true
+		}
+		switch u := err.(type) {
+		case interface{ Unwrap() error }:
+			err = u.Unwrap()
+		case interface{ Unwrap() []error }:
+			for _, child := range u.Unwrap() {
+				if chainAs(child, target) {
+					return true
+				}
+			}
+			return false
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+// @intent locate the nearest TraceError without the reflection cost of errors.As.
+// @domainRule kept non-generic: the generic chainAs pays a dictionary-based type-assertion
+// cost per link that this monomorphic loop avoids on the construction hot path.
+// @ensures returns nil when the chain carries no TraceError.
+func findTraceError(err error) *TraceError {
+	for err != nil {
+		if te, ok := err.(*TraceError); ok {
+			return te
+		}
+		if x, ok := err.(interface{ As(any) bool }); ok {
+			var te *TraceError
+			if x.As(&te) {
+				return te
+			}
+		}
+		switch u := err.(type) {
+		case interface{ Unwrap() error }:
+			err = u.Unwrap()
+		case interface{ Unwrap() []error }:
+			for _, child := range u.Unwrap() {
+				if te := findTraceError(child); te != nil {
+					return te
+				}
+			}
+			return nil
+		default:
+			return nil
+		}
+	}
+	return nil
+}
+
 // @intent normalize mixed message-and-arguments inputs into one human-readable error message.
 // @ensures returns an empty string when no message arguments are supplied.
 // formatMessage formats message and args similar to fmt.Sprintf
@@ -321,8 +381,7 @@ func formatMessage(msgAndArgs ...any) string {
 // GetFrames extracts frames from an error if available.
 // Returns a copy of the frames to prevent external mutation.
 func GetFrames(err error) Frames {
-	var te *TraceError
-	if errors.As(err, &te) {
+	if te := findTraceError(err); te != nil {
 		cp := make(Frames, len(te.Frames))
 		copy(cp, te.Frames)
 		return cp
@@ -335,8 +394,7 @@ func GetFrames(err error) Frames {
 // GetFields extracts fields from an error if available.
 // Returns a copy of the fields to prevent external mutation.
 func GetFields(err error) map[string]any {
-	var te *TraceError
-	if errors.As(err, &te) {
+	if te := findTraceError(err); te != nil {
 		return copyFields(te.Fields)
 	}
 	return nil
@@ -353,8 +411,7 @@ func WithField(err error, key string, value any) error {
 		return nil
 	}
 
-	var te *TraceError
-	if errors.As(err, &te) {
+	if te := findTraceError(err); te != nil {
 		newFields := copyFields(te.Fields)
 		newFields[key] = value
 		clone := cloneTraceError(te)
@@ -378,8 +435,7 @@ func WithFields(err error, fields map[string]any) error {
 		return nil
 	}
 
-	var te *TraceError
-	if errors.As(err, &te) {
+	if te := findTraceError(err); te != nil {
 		newFields := copyFields(te.Fields)
 		for k, v := range fields {
 			newFields[k] = v
@@ -540,8 +596,7 @@ func UserMessage(err error) string {
 		return ""
 	}
 
-	var te *TraceError
-	if errors.As(err, &te) {
+	if te := findTraceError(err); te != nil {
 		if te.Message != "" {
 			return te.Message
 		}
