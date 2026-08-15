@@ -168,9 +168,14 @@ func framesToSerializable(frames Frames) []map[string]any {
 }
 
 // @intent capture the caller information that anchors trace output to a concrete source location.
+// @intent let packages outside this module mint errors whose first frame points at their own caller.
 // @ensures returns an empty frame when runtime caller information is unavailable.
-// captureFrame captures a single stack frame at the given skip level
-func captureFrame(skip int) Frame {
+// CaptureFrame captures a single stack frame at the given skip level.
+//
+// skip follows runtime.Caller: 0 is CaptureFrame itself, 1 is its immediate
+// caller, and 2 is the caller of that function. Constructors that want the
+// frame to point at their own caller pass 2.
+func CaptureFrame(skip int) Frame {
 	pc, file, line, ok := runtime.Caller(skip)
 	if !ok {
 		return Frame{}
@@ -202,7 +207,7 @@ func Wrap(err error, msg ...string) error {
 		return nil
 	}
 
-	frame := captureFrame(2)
+	frame := CaptureFrame(2)
 	var message string
 	if len(msg) > 0 {
 		message = msg[0]
@@ -230,7 +235,7 @@ func Wrapf(err error, format string, args ...any) error {
 	if err == nil {
 		return nil
 	}
-	return wrapInternal(err, fmt.Sprintf(format, args...), captureFrame(2))
+	return wrapInternal(err, fmt.Sprintf(format, args...), CaptureFrame(2))
 }
 
 // @intent share the common TraceError wrapping path used by formatted and typed error helpers.
@@ -274,7 +279,7 @@ func WrapWithFields(err error, fields map[string]any, msg ...string) error {
 // @ensures returns a TraceError with initialized fields storage.
 // New creates a new error with stack trace
 func New(msg string) error {
-	frame := captureFrame(2)
+	frame := CaptureFrame(2)
 	return &TraceError{
 		Message: msg,
 		Frames:  Frames{frame},
@@ -287,7 +292,7 @@ func New(msg string) error {
 // @ensures returns a TraceError with initialized fields storage.
 // Errorf creates a new error with formatted message and stack trace
 func Errorf(format string, args ...any) error {
-	frame := captureFrame(2)
+	frame := CaptureFrame(2)
 	return &TraceError{
 		Message: fmt.Sprintf(format, args...),
 		Frames:  Frames{frame},
@@ -461,10 +466,6 @@ func replaceTraceError(err error, original *TraceError, replacement *TraceError)
 	case *CanceledError:
 		if e.TraceError == original {
 			return &CanceledError{TraceError: replacement}
-		}
-	case *httpStatusError:
-		if e.TraceError == original {
-			return &httpStatusError{TraceError: replacement, statusCode: e.statusCode}
 		}
 	}
 

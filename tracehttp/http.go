@@ -1,13 +1,19 @@
 // @index HTTP adapters that translate trace errors into API responses, middleware behavior, and client-side classifications.
-package trace
+//
+// Package tracehttp holds every part of trace that depends on net/http. It is a
+// separate package so that programs which only need error values, stack frames,
+// and slog integration never pull net/http, encoding/json, or the crypto/tls
+// tree into their binaries.
+package tracehttp
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
+
+	"github.com/tae2089/trace/v2"
 )
 
 // @intent give clients a stable machine-readable classification independent of HTTP status text.
@@ -41,6 +47,10 @@ const (
 	CodeInternal ErrorCode = "internal"
 )
 
+// StatusClientClosedRequest is the non-standard status used for a request the
+// client canceled before the server finished. It matches nginx's 499.
+const StatusClientClosedRequest = 499
+
 // @intent carry only validated status, semantic code, and client-safe message across an HTTP boundary.
 // HTTPError is the safe client-facing representation of an error.
 type HTTPError struct {
@@ -51,12 +61,18 @@ type HTTPError struct {
 
 // @intent let application-owned error types opt into explicit safe HTTP classification.
 // HTTPErrorProvider lets custom errors define a safe HTTP representation.
+//
+// It is the single extension point for application-defined mapping. An error
+// that implements it wins over this package's built-in classification, and the
+// outermost implementer in a chain wins over inner ones.
 type HTTPErrorProvider interface {
 	error
 	HTTPError() HTTPError
 }
 
 // @intent classify an error chain into a validated client-safe HTTP representation.
+// @domainRule the outermost classifiable link in the chain decides the response, so an
+// outer AccessDenied wrap is never overridden by an inner NotFound.
 // @domainRule invalid classifications become internal errors and every 5xx message is sanitized.
 // @ensures returns the zero value for nil and never derives a message from an outer trace wrapper.
 // ToHTTPError returns the safe HTTP representation for err.
@@ -65,17 +81,111 @@ func ToHTTPError(err error) HTTPError {
 		return HTTPError{}
 	}
 
-	var provider HTTPErrorProvider
-	if !errors.As(err, &provider) {
-		return internalHTTPError()
+	for link := range trace.Errors(err) {
+		if provider, ok := link.(HTTPErrorProvider); ok {
+			return validate(provider.HTTPError())
+		}
+		if aggregate, ok := link.(*trace.AggregateError); ok {
+			return aggregateHTTPError(aggregate)
+		}
+		if result, ok := classify(link); ok {
+			return validate(result)
+		}
 	}
 
-	result := provider.HTTPError()
+	return internalHTTPError()
+}
+
+// @intent classify exactly one error value without following its Unwrap chain.
+// @domainRule categories are tested in a fixed order so an error implementing several
+// behavior interfaces always produces the same status.
+func classify(link error) (HTTPError, bool) {
+	message := linkMessage(link)
+
+	switch e := link.(type) {
+	case trace.ErrorNotFound:
+		if e.IsNotFound() {
+			return HTTPError{http.StatusNotFound, CodeNotFound, message}, true
+		}
+	case trace.ErrorAlreadyExists:
+		if e.IsAlreadyExists() {
+			return HTTPError{http.StatusConflict, CodeAlreadyExists, message}, true
+		}
+	case trace.ErrorBadParameter:
+		if e.IsBadParameter() {
+			return HTTPError{http.StatusBadRequest, CodeBadRequest, message}, true
+		}
+	case trace.ErrorUnauthenticated:
+		if e.IsUnauthenticated() {
+			return HTTPError{http.StatusUnauthorized, CodeUnauthenticated, "authentication required"}, true
+		}
+	case trace.ErrorAccessDenied:
+		if e.IsAccessDenied() {
+			return HTTPError{http.StatusForbidden, CodeAccessDenied, "access denied"}, true
+		}
+	case trace.ErrorConflict:
+		if e.IsConflict() {
+			return HTTPError{http.StatusConflict, CodeConflict, message}, true
+		}
+	case trace.ErrorLimitExceeded:
+		if e.IsLimitExceeded() {
+			return HTTPError{http.StatusTooManyRequests, CodeLimitExceeded, message}, true
+		}
+	case trace.ErrorCanceled:
+		if e.IsCanceled() {
+			return HTTPError{StatusClientClosedRequest, CodeCanceled, "request canceled"}, true
+		}
+	case trace.ErrorNotImplemented:
+		if e.IsNotImplemented() {
+			return HTTPError{http.StatusNotImplemented, CodeNotImplemented, message}, true
+		}
+	case trace.ErrorConnectionProblem:
+		if e.IsConnectionProblem() {
+			return HTTPError{http.StatusServiceUnavailable, CodeUnavailable, message}, true
+		}
+	case trace.ErrorTimeout:
+		if e.IsTimeout() {
+			return HTTPError{http.StatusGatewayTimeout, CodeTimeout, message}, true
+		}
+	}
+
+	return HTTPError{}, false
+}
+
+// @intent read the message this specific error carries, never the message of an outer wrapper.
+func linkMessage(link error) string {
+	var te *trace.TraceError
+	if errors.As(link, &te) {
+		return te.Message
+	}
+	return ""
+}
+
+// @intent choose the safe representation with the highest child status for an aggregate failure.
+// @domainRule the most severe child wins rather than the first one traversed.
+func aggregateHTTPError(aggregate *trace.AggregateError) HTTPError {
+	var selected HTTPError
+	for _, child := range aggregate.Unwrap() {
+		if candidate := ToHTTPError(child); candidate.Status > selected.Status {
+			selected = candidate
+		}
+	}
+	if selected.Status == 0 {
+		return internalHTTPError()
+	}
+	return selected
+}
+
+// @intent reject malformed classifications and keep server-side detail out of 5xx responses.
+func validate(result HTTPError) HTTPError {
 	if result.Status < http.StatusBadRequest || result.Status > 599 || result.Code == "" {
 		return internalHTTPError()
 	}
 	if result.Status >= http.StatusInternalServerError {
 		result.Message = "internal server error"
+	}
+	if result.Message == "" {
+		result.Message = string(result.Code)
 	}
 	return result
 }
@@ -87,6 +197,16 @@ func internalHTTPError() HTTPError {
 		Code:    CodeInternal,
 		Message: "internal server error",
 	}
+}
+
+// @intent translate trace error categories into HTTP response codes at service boundaries.
+// @ensures returns HTTP 200 for nil errors and HTTP 500 for unclassifiable errors.
+// GetHTTPStatusCode returns the HTTP status code for an error.
+func GetHTTPStatusCode(err error) int {
+	if err == nil {
+		return http.StatusOK
+	}
+	return ToHTTPError(err).Status
 }
 
 // @intent group safe client fields under one stable JSON error envelope.
@@ -137,37 +257,14 @@ func WriteError(w http.ResponseWriter, err error, requestID string) error {
 	return json.NewEncoder(w).Encode(resp)
 }
 
-// @intent retain the legacy opt-in logging adapter while directing new callers to application-owned logging.
-// WriteErrorWithLogger writes an error response and logs it.
-//
-// Deprecated: applications should log request completion and call WriteError separately.
-func WriteErrorWithLogger(w http.ResponseWriter, err error, logger *slog.Logger) {
-	if err == nil {
-		return
-	}
-
-	statusCode := ToHTTPError(err).Status
-
-	// Log the full error with stack trace
-	if logger != nil {
-		logger.Error("http error",
-			SlogError(err),
-			slog.Int("status_code", statusCode),
-		)
-	}
-
-	if encErr := WriteError(w, err, ""); encErr != nil && logger != nil {
-		logger.Error("failed to encode error response", "encode_error", encErr)
-	}
-}
-
 // @intent let HTTP handlers return errors directly so middleware can centralize response rendering.
-// ErrorHandlerFunc is a function that handles HTTP requests and may return an error
+// ErrorHandlerFunc is a function that handles HTTP requests and may return an error.
 type ErrorHandlerFunc func(w http.ResponseWriter, r *http.Request) error
 
 // @intent adapt error-returning handlers into standard net/http handlers.
+// @sideEffect attaches method and path fields before writing the HTTP error response.
 // @ensures renders handler errors through the logger-free safe response writer.
-// ErrorMiddleware converts an ErrorHandlerFunc to a standard http.HandlerFunc
+// ErrorMiddleware converts an ErrorHandlerFunc to a standard http.HandlerFunc.
 func ErrorMiddleware(h ErrorHandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		err := h(w, r)
@@ -175,79 +272,12 @@ func ErrorMiddleware(h ErrorHandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		err = WithFields(err, map[string]any{
+		err = trace.WithFields(err, map[string]any{
 			"method": r.Method,
 			"path":   r.URL.Path,
 		})
 		_ = WriteError(w, err, "")
 	}
-}
-
-// @intent normalize handler failures into traced HTTP responses enriched with request metadata.
-// @sideEffect attaches method and path fields before writing the HTTP error response.
-// @ensures successful handlers pass through without writing an additional error response.
-// ErrorMiddlewareWithLogger converts an ErrorHandlerFunc to http.HandlerFunc with logging.
-//
-// Deprecated: applications should own request logging and use ErrorMiddleware or ErrorResponseFor.
-func ErrorMiddlewareWithLogger(h ErrorHandlerFunc, logger *slog.Logger) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		err := h(w, r)
-		if err != nil {
-			// Add request context to error
-			err = WithFields(err, map[string]any{
-				"method": r.Method,
-				"path":   r.URL.Path,
-			})
-			WriteErrorWithLogger(w, err, logger)
-		}
-	}
-}
-
-// @intent prevent panics from escaping the HTTP boundary and turn them into traceable server errors.
-// @domainRule recovered panics always return HTTP 500 with a generic client-facing message.
-// @sideEffect recovers panics, logs structured diagnostics, and writes a fallback JSON response.
-// RecoverMiddleware recovers from panics and converts them to errors.
-//
-// Deprecated: applications should own panic recovery and request-completion logging.
-func RecoverMiddleware(next http.Handler, logger *slog.Logger) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer func() {
-			if rec := recover(); rec != nil {
-				var err error
-				switch v := rec.(type) {
-				case error:
-					err = Wrap(v, "panic recovered")
-				default:
-					err = Errorf("panic recovered: %v", v)
-				}
-
-				err = WithFields(err, map[string]any{
-					"method": r.Method,
-					"path":   r.URL.Path,
-					"panic":  true,
-				})
-
-				if logger != nil {
-					logger.Error("panic recovered",
-						SlogError(err),
-					)
-				}
-
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusInternalServerError)
-				if encErr := json.NewEncoder(w).Encode(ErrorResponse{
-					Error: ErrorBody{
-						Code:    CodeInternal,
-						Message: "internal server error",
-					},
-				}); encErr != nil && logger != nil {
-					logger.Error("failed to encode panic response", "encode_error", encErr)
-				}
-			}
-		}()
-
-		next.ServeHTTP(w, r)
-	})
 }
 
 // @intent restore typed trace semantics from the public ErrorResponse envelope without deserializing internal trace data.
@@ -259,7 +289,7 @@ func ReadErrorResponse(statusCode int, responseBody []byte) error {
 		return nil
 	}
 
-	frame := captureFrame(2)
+	frame := trace.CaptureFrame(2)
 	var response ErrorResponse
 	if err := json.Unmarshal(responseBody, &response); err != nil {
 		return newReadErrorResponseTrace(frame, statusCode, "", "invalid error response")
@@ -295,27 +325,27 @@ func ReadErrorResponse(statusCode int, responseBody []byte) error {
 	)
 	switch response.Error.Code {
 	case CodeBadRequest:
-		return &BadParameterError{TraceError: traceError}
+		return &trace.BadParameterError{TraceError: traceError}
 	case CodeUnauthenticated:
-		return &UnauthenticatedError{TraceError: traceError}
+		return &trace.UnauthenticatedError{TraceError: traceError}
 	case CodeAccessDenied:
-		return &AccessDeniedError{TraceError: traceError}
+		return &trace.AccessDeniedError{TraceError: traceError}
 	case CodeNotFound:
-		return &NotFoundError{TraceError: traceError}
+		return &trace.NotFoundError{TraceError: traceError}
 	case CodeAlreadyExists:
-		return &AlreadyExistsError{TraceError: traceError}
+		return &trace.AlreadyExistsError{TraceError: traceError}
 	case CodeConflict:
-		return &ConflictError{TraceError: traceError}
+		return &trace.ConflictError{TraceError: traceError}
 	case CodeLimitExceeded:
-		return &LimitExceededError{TraceError: traceError}
+		return &trace.LimitExceededError{TraceError: traceError}
 	case CodeCanceled:
-		return &CanceledError{TraceError: traceError}
+		return &trace.CanceledError{TraceError: traceError}
 	case CodeNotImplemented:
-		return &NotImplementedError{TraceError: traceError}
+		return &trace.NotImplementedError{TraceError: traceError}
 	case CodeUnavailable:
-		return &ConnectionProblemError{TraceError: traceError}
+		return &trace.ConnectionProblemError{TraceError: traceError}
 	case CodeTimeout:
-		return &TimeoutError{TraceError: traceError}
+		return &trace.TimeoutError{TraceError: traceError}
 	case CodeInternal:
 		return traceError
 	default:
@@ -325,6 +355,19 @@ func ReadErrorResponse(statusCode int, responseBody []byte) error {
 			response.Error.RequestID,
 			"invalid error response",
 		)
+	}
+}
+
+// @intent build the trace error that carries the safe message and upstream response metadata.
+func newReadErrorResponseTrace(frame trace.Frame, statusCode int, requestID, message string) *trace.TraceError {
+	fields := map[string]any{"status_code": statusCode}
+	if requestID != "" {
+		fields["request_id"] = requestID
+	}
+	return &trace.TraceError{
+		Message: message,
+		Frames:  trace.Frames{frame},
+		Fields:  fields,
 	}
 }
 
@@ -344,7 +387,7 @@ func errorCodeMatchesStatus(code ErrorCode, statusCode int) bool {
 	case CodeLimitExceeded:
 		return statusCode == http.StatusTooManyRequests
 	case CodeCanceled:
-		return statusCode == 499
+		return statusCode == StatusClientClosedRequest
 	case CodeNotImplemented:
 		return statusCode == http.StatusNotImplemented
 	case CodeUnavailable:
@@ -358,29 +401,14 @@ func errorCodeMatchesStatus(code ErrorCode, statusCode int) bool {
 	}
 }
 
-// @intent construct a fresh local trace from only the safe response metadata allowed across the HTTP boundary.
-func newReadErrorResponseTrace(
-	frame Frame,
-	statusCode int,
-	requestID string,
-	message string,
-) *TraceError {
-	fields := map[string]any{"status_code": statusCode}
-	if requestID != "" {
-		fields["request_id"] = requestID
-	}
-	return &TraceError{
-		Message: message,
-		Frames:  Frames{frame},
-		Fields:  fields,
-	}
-}
-
-// @intent retain legacy status-based classification for plain-text upstream responses.
+// @intent classify an upstream response for developer-facing debugging rather than client rendering.
 // @domainRule 2xx responses are not errors, while known status codes map to typed trace errors.
 // @ensures records the current call site as the first trace frame and stores upstream status metadata in error fields.
 // FromHTTPResponse creates an appropriate error from an HTTP response.
-// It retains body in the developer-facing error; prefer ReadErrorResponse for the safe JSON envelope.
+//
+// It retains body in the developer-facing error, so the resulting error must not
+// be handed to WriteError on a public boundary. Prefer ReadErrorResponse, which
+// reads the safe JSON envelope and keeps no raw body.
 func FromHTTPResponse(resp *http.Response, body []byte) error {
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return nil
@@ -391,10 +419,9 @@ func FromHTTPResponse(resp *http.Response, body []byte) error {
 		msg = http.StatusText(resp.StatusCode)
 	}
 
-	frame := captureFrame(2)
-	te := &TraceError{
+	te := &trace.TraceError{
 		Message: msg,
-		Frames:  Frames{frame},
+		Frames:  trace.Frames{trace.CaptureFrame(2)},
 		Fields: map[string]any{
 			"status_code": resp.StatusCode,
 			"status":      resp.Status,
@@ -403,32 +430,29 @@ func FromHTTPResponse(resp *http.Response, body []byte) error {
 
 	switch resp.StatusCode {
 	case http.StatusNotFound:
-		return &NotFoundError{TraceError: te}
+		return &trace.NotFoundError{TraceError: te}
 	case http.StatusConflict:
-		return &ConflictError{TraceError: te}
+		return &trace.ConflictError{TraceError: te}
 	case http.StatusBadRequest:
-		return &BadParameterError{TraceError: te}
+		return &trace.BadParameterError{TraceError: te}
 	case http.StatusUnauthorized:
-		return &UnauthenticatedError{TraceError: te}
+		return &trace.UnauthenticatedError{TraceError: te}
 	case http.StatusForbidden:
-		return &AccessDeniedError{TraceError: te}
+		return &trace.AccessDeniedError{TraceError: te}
 	case http.StatusTooManyRequests:
-		return &LimitExceededError{TraceError: te}
+		return &trace.LimitExceededError{TraceError: te}
 	case http.StatusGatewayTimeout, http.StatusRequestTimeout:
-		return &TimeoutError{TraceError: te}
+		return &trace.TimeoutError{TraceError: te}
 	case http.StatusServiceUnavailable, http.StatusBadGateway:
-		return &ConnectionProblemError{TraceError: te}
+		return &trace.ConnectionProblemError{TraceError: te}
 	default:
-		return &httpStatusError{
-			TraceError: te,
-			statusCode: resp.StatusCode,
-		}
+		return &statusError{err: te, status: resp.StatusCode}
 	}
 }
 
 // @intent test whether an error chain resolves to a specific HTTP status mapping.
 // @ensures delegates status resolution to GetHTTPStatusCode.
-// IsHTTPError checks if an error corresponds to a specific HTTP status code
+// IsHTTPError checks if an error corresponds to a specific HTTP status code.
 func IsHTTPError(err error, statusCode int) bool {
 	return GetHTTPStatusCode(err) == statusCode
 }
@@ -436,53 +460,66 @@ func IsHTTPError(err error, statusCode int) bool {
 // @intent override or attach explicit HTTP status semantics to an existing error chain.
 // @domainRule returns nil unchanged when the source error is nil.
 // @mutates adds http_status metadata to the returned traced wrapper.
-// WrapHTTPError wraps an error with HTTP status code information
+// @ensures the returned error accumulates the caller frame on top of the source frames and
+// carries the source fields forward, so GetFrames and GetFields stay useful after wrapping.
+// WrapHTTPError wraps an error with HTTP status code information.
 func WrapHTTPError(err error, statusCode int, msg ...string) error {
 	if err == nil {
 		return nil
 	}
 
-	frame := captureFrame(2)
 	var message string
 	if len(msg) > 0 {
 		message = msg[0]
 	}
-	te := wrapTypedInternal(err, message, frame)
-	if te.Fields == nil {
-		te.Fields = make(map[string]any)
-	}
-	te.Fields["http_status"] = statusCode
 
-	return &httpStatusError{
-		TraceError: te,
-		statusCode: statusCode,
+	fields := trace.GetFields(err)
+	if fields == nil {
+		fields = make(map[string]any)
+	}
+	fields["http_status"] = statusCode
+
+	return &statusError{
+		err: &trace.TraceError{
+			Err:     err,
+			Message: message,
+			Frames:  append(trace.Frames{trace.CaptureFrame(2)}, trace.GetFrames(err)...),
+			Fields:  fields,
+		},
+		status: statusCode,
 	}
 }
 
 // @intent carry an explicit HTTP status override for errors that do not map to one of the standard typed categories.
-type httpStatusError struct {
-	*TraceError
-	statusCode int
+type statusError struct {
+	err    error
+	status int
 }
 
-// @intent expose the explicit status override carried by this internal HTTP error wrapper.
-func (e *httpStatusError) HTTPStatusCode() int { return e.statusCode }
+// @intent expose the explicit status override through the single HTTP extension point.
+func (e *statusError) HTTPError() HTTPError {
+	code := CodeInternal
+	if e.status < http.StatusInternalServerError {
+		code = CodeBadRequest
+	}
+	return HTTPError{Status: e.status, Code: code, Message: trace.UserMessage(e.err)}
+}
 
-// @intent delegate user-facing string rendering to the embedded TraceError.
-func (e *httpStatusError) Error() string { return e.TraceError.Error() }
+// @intent delegate user-facing string rendering to the wrapped error.
+func (e *statusError) Error() string { return e.err.Error() }
 
-// @intent expose the embedded TraceError to standard Go error traversal.
-func (e *httpStatusError) Unwrap() error { return e.TraceError }
+// @intent expose the wrapped error to standard Go error traversal.
+func (e *statusError) Unwrap() error { return e.err }
 
 // @intent wrap http.Client so transport failures come back as trace-classified errors.
-// Client is an HTTP client that wraps errors with trace information
+// Client is an HTTP client that wraps errors with trace information.
 type Client struct {
 	*http.Client
 }
 
 // @intent provide an HTTP client wrapper that returns trace-classified transport failures.
 // @ensures falls back to http.DefaultClient when no custom client is supplied.
-// NewClient creates a new trace-aware HTTP client
+// NewClient creates a new trace-aware HTTP client.
 func NewClient(client *http.Client) *Client {
 	if client == nil {
 		client = http.DefaultClient
@@ -493,15 +530,14 @@ func NewClient(client *http.Client) *Client {
 // @intent classify outbound HTTP transport failures into timeout or connection problem errors.
 // @domainRule deadline exceeded maps to Timeout and other transport failures map to ConnectionProblem.
 // @sideEffect executes the underlying HTTP request through the wrapped client.
-// Do executes the request and wraps any errors with trace information
+// Do executes the request and wraps any errors with trace information.
 func (c *Client) Do(req *http.Request) (*http.Response, error) {
 	resp, err := c.Client.Do(req)
 	if err != nil {
-		// Check for specific error types
 		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, Timeout(err, fmt.Sprintf("request to %s timed out", req.URL.Host))
+			return nil, trace.Timeout(err, fmt.Sprintf("request to %s timed out", req.URL.Host))
 		}
-		return nil, ConnectionProblem(err, fmt.Sprintf("request to %s failed", req.URL.Host))
+		return nil, trace.ConnectionProblem(err, fmt.Sprintf("request to %s failed", req.URL.Host))
 	}
 	return resp, nil
 }

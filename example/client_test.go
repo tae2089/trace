@@ -9,7 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tae2089/trace"
+	"github.com/tae2089/trace/v2"
+	"github.com/tae2089/trace/v2/tracehttp"
 )
 
 func TestFetchUserRestoresSafeErrorResponse(t *testing.T) {
@@ -33,12 +34,12 @@ func TestFetchUserRestoresSafeErrorResponse(t *testing.T) {
 	if !trace.IsNotFound(err) {
 		t.Fatalf("fetchUser() error = %T %v, want not found", err, err)
 	}
-	wantHTTPError := trace.HTTPError{
+	wantHTTPError := tracehttp.HTTPError{
 		Status:  http.StatusNotFound,
-		Code:    trace.CodeNotFound,
+		Code:    tracehttp.CodeNotFound,
 		Message: "user user-123 not found in database",
 	}
-	if got := trace.ToHTTPError(err); got != wantHTTPError {
+	if got := tracehttp.ToHTTPError(err); got != wantHTTPError {
 		t.Fatalf("ToHTTPError() = %#v, want %#v", got, wantHTTPError)
 	}
 	wantFields := map[string]any{

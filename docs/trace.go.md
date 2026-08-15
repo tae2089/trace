@@ -58,15 +58,15 @@ Schema: {"message":..., "cause":..., "trace":[{"file":..., "line":..., "func":..
 - **Ensures:**
   - preserves file, line, and function data for each frame.
 
-### captureFrame
-- **Lines:** 173–190
+### CaptureFrame
+- **Lines:** 178–195
 - **Intent:** capture the caller information that anchors trace output to a concrete source location.
 - **Ensures:**
   - returns an empty frame when runtime caller information is unavailable.
-captureFrame captures a single stack frame at the given skip level
+CaptureFrame captures a single stack frame at the given skip level.
 
 ### Wrap
-- **Lines:** 200–223
+- **Lines:** 205–228
 - **Intent:** preserve the original error while adding call-site debugging context.
 - **Domain Rules:**
   - typed errors stay discoverable through the Err chain for errors.Is and errors.As.
@@ -77,27 +77,27 @@ Wrap wraps an error with stack trace information.
 If err is nil, Wrap returns nil.
 Wrap always creates a new TraceError, preserving the original error
 (including typed errors like NotFoundError) in the Err field.
-- **Calls:** As, captureFrame
+- **Calls:** As, CaptureFrame
 
 ### Wrapf
-- **Lines:** 229–234
+- **Lines:** 234–239
 - **Intent:** preserve the original error while adding formatted debugging context.
 - **Domain Rules:**
   - typed errors stay discoverable through the Err chain for errors.Is and errors.As.
 - **Ensures:**
   - returns nil unchanged when no source error is provided.
 Wrapf wraps an error with stack trace and a formatted message.
-- **Calls:** captureFrame, wrapInternal
+- **Calls:** CaptureFrame, wrapInternal
 
 ### wrapInternal
-- **Lines:** 238–251
+- **Lines:** 243–256
 - **Intent:** share the common TraceError wrapping path used by formatted and typed error helpers.
 - **Ensures:**
   - prepends the supplied frame to any existing trace frames.
 - **Calls:** As
 
 ### WrapWithFields
-- **Lines:** 258–270
+- **Lines:** 263–275
 - **Intent:** enrich an error with structured diagnostics that can flow into logs and HTTP responses.
 - **Domain Rules:**
   - field attachment must not discard the wrapped error chain.
@@ -108,32 +108,32 @@ WrapWithFields wraps an error with stack trace and structured fields
 - **Calls:** Wrap
 
 ### New
-- **Lines:** 276–283
+- **Lines:** 281–288
 - **Intent:** create a fresh traceable application error at the current call site.
 - **Ensures:**
   - records the current call site as the first trace frame.
   - returns a TraceError with initialized fields storage.
 New creates a new error with stack trace
-- **Calls:** captureFrame
+- **Calls:** CaptureFrame
 
 ### Errorf
-- **Lines:** 289–296
+- **Lines:** 294–301
 - **Intent:** create a traceable error from formatted application context.
 - **Ensures:**
   - records the current call site as the first trace frame.
   - returns a TraceError with initialized fields storage.
 Errorf creates a new error with formatted message and stack trace
-- **Calls:** captureFrame
+- **Calls:** CaptureFrame
 
 ### formatMessage
-- **Lines:** 301–318
+- **Lines:** 306–323
 - **Intent:** normalize mixed message-and-arguments inputs into one human-readable error message.
 - **Ensures:**
   - returns an empty string when no message arguments are supplied.
 formatMessage formats message and args similar to fmt.Sprintf
 
 ### GetFrames
-- **Lines:** 324–332
+- **Lines:** 329–337
 - **Intent:** expose captured stack frames for diagnostics without leaking mutable internal state.
 - **Ensures:**
   - returns a defensive copy of the stored frames when trace data exists.
@@ -142,7 +142,7 @@ Returns a copy of the frames to prevent external mutation.
 - **Calls:** As
 
 ### GetFields
-- **Lines:** 338–344
+- **Lines:** 343–349
 - **Intent:** expose structured trace metadata for logging, transport, or inspection layers.
 - **Ensures:**
   - returns a defensive copy of the stored fields when trace data exists.
@@ -151,7 +151,7 @@ Returns a copy of the fields to prevent external mutation.
 - **Calls:** As, copyFields
 
 ### WithField
-- **Lines:** 352–371
+- **Lines:** 357–376
 - **Intent:** attach one diagnostic attribute without mutating the original error instance.
 - **Domain Rules:**
   - built-in trace wrapper types are preserved when replacing the inner TraceError.
@@ -163,7 +163,7 @@ It returns a new wrapper error with the field added, preserving the original err
 - **Calls:** As, Wrap, cloneTraceError, replaceTraceError, copyFields
 
 ### WithFields
-- **Lines:** 377–400
+- **Lines:** 382–405
 - **Intent:** attach multiple diagnostic attributes without mutating the original error instance.
 - **Domain Rules:**
   - later field values override earlier values for the same key.
@@ -173,26 +173,26 @@ It returns a new wrapper error with the field added, preserving the original err
 - **Calls:** As, Wrap, cloneTraceError, replaceTraceError, copyFields
 
 ### cloneTraceError
-- **Lines:** 404–411
+- **Lines:** 409–416
 - **Intent:** duplicate a TraceError so field updates can preserve immutable error semantics.
 - **Ensures:**
   - returns a copy with duplicated frames and fields.
 - **Calls:** copyFields
 
 ### replaceTraceError
-- **Lines:** 415–472
+- **Lines:** 420–473
 - **Intent:** swap the inner TraceError while preserving known wrapper types around it.
 - **Domain Rules:**
   - built-in typed wrappers are recreated so errors.Is and errors.As continue to work.
 
 ### copyFields
-- **Lines:** 476–482
+- **Lines:** 477–483
 - **Intent:** defensively copy structured error fields before mutation or external exposure.
 - **Ensures:**
   - returns a new map containing every existing field.
 
 ### DebugReport
-- **Lines:** 488–500
+- **Lines:** 489–501
 - **Intent:** render a full developer-facing report for nested and aggregated error chains.
 - **Domain Rules:**
   - aggregate errors must include every branch in the rendered report.
@@ -202,14 +202,14 @@ DebugReport returns a detailed report of the error chain
 - **Calls:** debugReportWalk
 
 ### debugReportWalk
-- **Lines:** 504–539
+- **Lines:** 505–540
 - **Intent:** recursively expand an error tree into the developer-facing debug report.
 - **Ensures:**
   - traverses both single-cause chains and aggregate branches.
 - **Calls:** Error, Unwrap, Unwrap, debugReportWalk, debugReportWalk
 
 ### UserMessage
-- **Lines:** 545–561
+- **Lines:** 546–562
 - **Intent:** extract the safest high-level message to show outside debugging channels.
 - **Domain Rules:**
   - prefer explicit TraceError messages before falling back to wrapped causes.
@@ -219,7 +219,7 @@ UserMessage returns a user-friendly error message without stack traces
 - **Calls:** As, Error, UserMessage
 
 ### Errors
-- **Lines:** 569–573
+- **Lines:** 570–574
 - **Intent:** iterate every error reachable from wrapped and aggregated trace errors.
 - **Domain Rules:**
   - aggregate branches are traversed recursively, not flattened into a single message.
@@ -231,7 +231,7 @@ recursively traversing Unwrap() []error (e.g., AggregateError).
 - **Calls:** errorsWalk
 
 ### errorsWalk
-- **Lines:** 577–593
+- **Lines:** 578–594
 - **Intent:** recursively traverse every reachable error in a chain or aggregate until the consumer stops.
 - **Ensures:**
   - returns false as soon as the yield function asks traversal to stop.

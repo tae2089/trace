@@ -65,7 +65,7 @@ WrapContext wraps an error with context information
 FromContext checks for context errors and wraps them appropriately.
 Uses context.Cause (Go 1.20+) to capture the cancellation cause when available,
 preserving the original reason for cancellation rather than just context.Canceled.
-- **Calls:** contextFieldsToMap, contextFieldsToMap, contextFieldsToMap, Err, captureFrame
+- **Calls:** contextFieldsToMap, contextFieldsToMap, contextFieldsToMap, Err, CaptureFrame
 
 ### contextFieldsToMap
 - **Lines:** 158–169
@@ -78,26 +78,27 @@ preserving the original reason for cancellation rather than just context.Cancele
 - **Lines:** 178–178
 - **Intent:** advertise cancellation semantics for behavior-based error checks.
 
-### HTTPStatusCode
-- **Lines:** 182–182
-- **Intent:** map cancellation failures to HTTP 499-style client-aborted responses.
-HTTP 499 follows the nginx-style Client Closed Request convention.
-
-### HTTPError
-- **Lines:** 185–187
-- **Intent:** expose only a fixed cancellation message to clients.
+### Canceled
+- **Lines:** 184–191
+- **Intent:** wrap an existing cancellation cause as a typed trace error.
+- **Domain Rules:**
+  - returns nil unchanged when the source error is nil.
+- **Ensures:**
+  - records the current call site as the first trace frame.
+Canceled wraps err as a CanceledError.
+- **Calls:** wrapTypedInternal, CaptureFrame, formatMessage
 
 ### Error
-- **Lines:** 190–190
+- **Lines:** 194–194
 - **Intent:** delegate user-facing string rendering to the embedded TraceError.
 - **Calls:** Error
 
 ### Unwrap
-- **Lines:** 193–193
+- **Lines:** 197–197
 - **Intent:** expose the embedded TraceError to standard Go error traversal.
 
 ### IsCanceled
-- **Lines:** 205–214
+- **Lines:** 209–218
 - **Intent:** detect cancellation semantics anywhere in an error chain.
 - **Ensures:**
   - returns false for nil errors.
@@ -105,7 +106,7 @@ IsCanceled checks if an error is a cancellation error
 - **Calls:** IsCanceled, As
 
 ### IsDeadlineExceeded
-- **Lines:** 219–227
+- **Lines:** 223–231
 - **Intent:** detect deadline-expired failures across both context and trace timeout wrappers.
 - **Ensures:**
   - returns false for nil errors.
@@ -113,14 +114,14 @@ IsDeadlineExceeded checks if an error is due to deadline exceeded
 - **Calls:** IsTimeout
 
 ### NewContextualizer
-- **Lines:** 238–240
+- **Lines:** 242–244
 - **Intent:** create a helper that consistently applies one context's trace metadata across multiple operations.
 - **Ensures:**
   - returns a Contextualizer bound to the provided context.
 NewContextualizer creates a new Contextualizer
 
 ### Wrap
-- **Lines:** 245–247
+- **Lines:** 249–251
 - **Intent:** wrap an operation failure with the contextualizer's stored trace metadata.
 - **Ensures:**
   - delegates to WrapContext using the contextualizer's context.
@@ -128,7 +129,7 @@ Wrap wraps an error with context information
 - **Calls:** WrapContext
 
 ### Do
-- **Lines:** 252–258
+- **Lines:** 256–262
 - **Intent:** run a function and automatically enrich any resulting error with the contextualizer's trace metadata.
 - **Ensures:**
   - returns nil when the function succeeds.
@@ -136,7 +137,7 @@ Do executes a function and wraps any error with context
 - **Calls:** WrapContext
 
 ### DoValue
-- **Lines:** 263–269
+- **Lines:** 267–273
 - **Intent:** run a value-returning function and preserve its result while enriching any error with trace metadata.
 - **Ensures:**
   - returns the function's value unchanged alongside a wrapped error when the call fails.
@@ -144,7 +145,7 @@ DoValue executes a function returning a value and wraps any error
 - **Calls:** WrapContext
 
 ### CheckContext
-- **Lines:** 274–281
+- **Lines:** 278–285
 - **Intent:** provide a cheap guard for aborting work when the context is already done.
 - **Ensures:**
   - returns nil while the context is still usable and a traced context error otherwise.
@@ -152,7 +153,7 @@ CheckContext checks if context is still valid and returns error if not
 - **Calls:** FromContext
 
 ### WrapIfContextDone
-- **Lines:** 287–301
+- **Lines:** 291–305
 - **Intent:** preserve both the operation failure and any concurrent context cancellation signal.
 - **Domain Rules:**
   - when the context is done, the returned error aggregates the original error with the context-derived failure.
@@ -162,7 +163,7 @@ WrapIfContextDone wraps the error with context info if context is done
 - **Calls:** WrapContext, FromContext, Aggregate
 
 ### DetachedContext
-- **Lines:** 308–310
+- **Lines:** 312–314
 - **Intent:** keep request metadata available for background work that must outlive request cancellation.
 - **Domain Rules:**
   - inherited values are preserved while cancellation is detached from the parent.
@@ -171,7 +172,7 @@ but is not canceled when the parent is canceled (Go 1.21+).
 Useful for background cleanup or logging that should outlive the request.
 
 ### OnCancel
-- **Lines:** 317–319
+- **Lines:** 321–323
 - **Intent:** register cleanup or follow-up work that should run when the contextualizer's context is canceled.
 - **Side Effects:** schedules a callback with the underlying context cancellation machinery.
 - **Ensures:**
@@ -180,7 +181,7 @@ OnCancel registers fn to run after the context is canceled (Go 1.21+).
 Returns a stop function that prevents fn from running if called before cancellation.
 
 ### WithCancelCause
-- **Lines:** 325–327
+- **Lines:** 329–331
 - **Intent:** expose cancel-cause semantics through the trace package API so callers can preserve shutdown reasons.
 - **Ensures:**
   - returned contexts can later surface their cause via context.Cause.
@@ -189,7 +190,7 @@ The cause can later be retrieved via context.Cause(ctx).
 - **Calls:** WithCancelCause
 
 ### WithTimeoutCause
-- **Lines:** 333–335
+- **Lines:** 337–339
 - **Intent:** create a timeout that preserves an explicit business cause for later error wrapping.
 - **Ensures:**
   - the returned context is canceled after the deadline with the supplied cause.
@@ -205,7 +206,7 @@ with the specified cause error (Go 1.21+).
 CanceledError represents a context cancellation error
 
 ### Contextualizer
-- **Lines:** 231–233
+- **Lines:** 235–237
 - **Intent:** bundle one context's trace metadata and cancellation hooks for reuse across multiple operations.
 Contextualizer wraps operations with context-aware error handling
 
@@ -216,6 +217,6 @@ Contextualizer wraps operations with context-aware error handling
 - **Intent:** isolate trace-specific context values from unrelated context keys.
 
 ### ErrorCanceled
-- **Lines:** 197–200
+- **Lines:** 201–204
 - **Intent:** let callers recognize cancellation semantics through behavior rather than concrete types.
 ErrorCanceled is an interface for canceled errors

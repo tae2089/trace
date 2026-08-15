@@ -26,7 +26,7 @@ Err creates a failed Result
 - **Ensures:**
   - records the current call site as the first trace frame.
 ErrMsg creates a failed Result with a message
-- **Calls:** captureFrame
+- **Calls:** CaptureFrame
 
 ### IsOk
 - **Lines:** 46–48
@@ -104,7 +104,7 @@ FlatMap chains Result-returning operations
 - **Ensures:**
   - wraps non-nil errors with trace context before storing them.
 Try wraps a function call that returns (T, error) into a Result
-- **Calls:** captureFrame
+- **Calls:** CaptureFrame
 
 ### Must
 - **Lines:** 151–153

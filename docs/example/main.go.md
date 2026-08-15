@@ -6,29 +6,29 @@
 ## Functions
 
 ### main
-- **Lines:** 15–23
+- **Lines:** 16–24
 - **Intent:** demonstrate how an application owns request logging while trace renders safe error responses.
 - **Calls:** handle
 
 ### handle
-- **Lines:** 26–43
+- **Lines:** 27–44
 - **Intent:** keep request logging policy in the application and delegate only safe response rendering to trace.
-- **Calls:** ToHTTPError, WriteError, SlogError
+- **Calls:** SlogError, ToHTTPError, WriteError
 
 ### getUserHandler
-- **Lines:** 47–63
+- **Lines:** 48–64
 - **Intent:** show how handlers return errors to the application-owned HTTP adapter.
 getUserHandler handles GET /users/{id} requests
 - **Calls:** getUserService, Wrap
 
 ### getUserService
-- **Lines:** 67–74
+- **Lines:** 68–75
 - **Intent:** demonstrate service-layer wrapping that adds user-specific context before errors cross boundaries.
 getUserService retrieves a user by ID
 - **Calls:** repoFindUser, Wrapf
 
 ### repoFindUser
-- **Lines:** 78–85
+- **Lines:** 79–86
 - **Intent:** demonstrate repository-layer translation from storage failures into typed trace errors.
 repoFindUser simulates database query
 - **Calls:** WrapNotFound
@@ -36,6 +36,6 @@ repoFindUser simulates database query
 ## Classes
 
 ### User
-- **Lines:** 89–92
+- **Lines:** 90–93
 - **Intent:** provide a minimal response model for the trace package usage example.
 User represents a user entity

@@ -6,9 +6,12 @@
     "example/client.go.md",
     "example/main.go.md",
     "generics.go.md",
-    "http.go.md",
     "slog.go.md",
+    "syserrors.go.md",
+    "syserrors_errno.go.md",
+    "syserrors_other.go.md",
     "trace.go.md",
+    "tracehttp/http.go.md",
     "index.md"
   ]
 }

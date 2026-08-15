@@ -7,7 +7,8 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/tae2089/trace"
+	"github.com/tae2089/trace/v2"
+	"github.com/tae2089/trace/v2/tracehttp"
 )
 
 const maxUserResponseBytes int64 = 1 << 20
@@ -46,7 +47,7 @@ func fetchUser(
 	if int64(len(body)) > maxUserResponseBytes {
 		return nil, trace.Errorf("user response exceeds %d bytes", maxUserResponseBytes)
 	}
-	if err := trace.ReadErrorResponse(response.StatusCode, body); err != nil {
+	if err := tracehttp.ReadErrorResponse(response.StatusCode, body); err != nil {
 		return nil, err
 	}
 
