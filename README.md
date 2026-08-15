@@ -721,7 +721,7 @@ v2.
 
 ## Changelog
 
-### v2.0.0 (unreleased)
+### v2.0.0
 
 - **Breaking**: Module path is now `github.com/tae2089/trace/v2`
 - **Breaking**: Every `net/http`-dependent symbol moved to the `tracehttp` package
