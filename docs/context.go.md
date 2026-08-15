@@ -103,7 +103,7 @@ Canceled wraps err as a CanceledError.
 - **Ensures:**
   - returns false for nil errors.
 IsCanceled checks if an error is a cancellation error
-- **Calls:** IsCanceled, As
+- **Calls:** IsCanceled, chainAs
 
 ### IsDeadlineExceeded
 - **Lines:** 223–231

@@ -533,6 +533,33 @@ fmt.Println(trace.DebugReport(err))
 msg := trace.UserMessage(err) // "failed to fetch user"
 ```
 
+## Performance
+
+Construction is the hot path — errors are created far more often than they are
+printed — so v2 moves cost from creation to rendering:
+
+- A `Frame` records only the program counter. The function name, file, and line
+  resolve when the error is rendered (`Error()`, `%+v`, slog, JSON).
+- The structured fields map is allocated only when a field is attached.
+- Hot paths walk the error chain with plain type assertions instead of
+  `errors.As`, with the same semantics (including the `As(any) bool` hook and
+  aggregate branches).
+
+Measured on Apple M1 Pro, Go 1.25 (`go test -bench . -benchmem`):
+
+| Benchmark | v1 layout | v2 |
+| --- | --- | --- |
+| `Wrap` (1 level) | 435 ns, 416 B, 6 allocs | 162 ns, 72 B, 2 allocs |
+| `NotFound` | 389 ns, 416 B, 6 allocs | 165 ns, 80 B, 3 allocs |
+| `Wrap` ×10 deep | 4.9 µs, 6.4 KB, 69 allocs | 1.9 µs, 1.2 KB, 29 allocs |
+| `CaptureFrame` | 285 ns, 248 B, 2 allocs | 95 ns, 0 B, 0 allocs |
+| `IsNotFound` (10 deep) | 638 ns | 102 ns |
+| `err.Error()` (5 deep) | 1.3 µs | 4.4 µs |
+
+The last row is the deliberate trade: rendering pays for the deferred symbol
+resolution. `fmt.Errorf("%w")` is still ~2× faster than `Wrap` — that is the
+price of carrying a stack trace at all.
+
 ## Best Practices
 
 ### 1. Wrap at Every Layer
@@ -705,6 +732,12 @@ v2.
 - **Added**: `ConvertSystemError(err)` for `os`, `io/fs`, and `syscall` failures
 - **Added**: `Canceled(err, msg)` and `WrapLimitExceeded(err, msg)` constructors
 - **Added**: `CaptureFrame(skip)` is now exported so other packages can build trace errors
+- **Breaking**: `Frame` stores only a program counter; `Function`, `File`, and `Line` are
+  methods now, and symbol resolution happens at render time. `MarshalJSON` keeps the
+  `{"function","file","line"}` wire shape
+- **Performance**: `Wrap` 435→162 ns and 6→2 allocs; a 10-deep wrap chain 4.9µs→1.9µs;
+  `IsNotFound` on a 10-deep chain 638→102 ns; the structured fields map is allocated
+  lazily and `errors.As` was replaced with a reflection-free chain walk on hot paths
 - **Added**: Apache-2.0 `LICENSE` and a CI workflow that rejects `net/http` in the root package
 - **Changed**: `ToHTTPError` documents and tests outermost-wins classification ordering
 
