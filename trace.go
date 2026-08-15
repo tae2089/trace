@@ -4,6 +4,7 @@
 package trace
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,18 +17,70 @@ import (
 )
 
 // @intent describe one recorded call site so errors and logs can point back to their origin.
-// Frame represents a single stack frame
+// @domainRule only the program counter is stored; symbol resolution is deferred to render
+// time because errors are created far more often than they are printed.
+// Frame represents a single stack frame. It records the call site as a
+// program counter and resolves the function name, file, and line lazily.
 type Frame struct {
-	Function string `json:"function"`
-	File     string `json:"file"`
-	Line     int    `json:"line"`
+	pc uintptr
+}
+
+// @intent resolve the stored program counter into human-readable call-site data.
+// @ensures returns zero values for a zero frame and an "unknown" function name
+// when symbol information is unavailable.
+func (f Frame) resolve() (function, file string, line int) {
+	if f.pc == 0 {
+		return "", "", 0
+	}
+	frame, _ := runtime.CallersFrames([]uintptr{f.pc}).Next()
+	function = frame.Function
+	if function == "" {
+		function = "unknown"
+	} else {
+		function = filepath.Base(function)
+	}
+	if frame.File != "" {
+		file = filepath.Base(frame.File)
+	}
+	return function, file, frame.Line
+}
+
+// @intent expose the resolved function name for the recorded call site.
+func (f Frame) Function() string {
+	function, _, _ := f.resolve()
+	return function
+}
+
+// @intent expose the resolved file base name for the recorded call site.
+func (f Frame) File() string {
+	_, file, _ := f.resolve()
+	return file
+}
+
+// @intent expose the resolved line number for the recorded call site.
+func (f Frame) Line() int {
+	_, _, line := f.resolve()
+	return line
 }
 
 // @intent render a single frame in a compact file-line-function format for debugging output.
 // @ensures returns a string containing the file name, line number, and function name.
 // String returns a human-readable representation of the frame
 func (f Frame) String() string {
-	return fmt.Sprintf("%s:%d %s", f.File, f.Line, f.Function)
+	function, file, line := f.resolve()
+	return fmt.Sprintf("%s:%d %s", file, line, function)
+}
+
+// @intent keep the frame's JSON wire shape stable while the in-memory layout stays a bare program counter.
+// @ensures emits the {"function":...,"file":...,"line":...} object shape used by earlier versions.
+// MarshalJSON implements json.Marshaler.
+func (f Frame) MarshalJSON() ([]byte, error) {
+	function, file, line := f.resolve()
+	return json.Marshal(struct {
+		Function string `json:"function"`
+		File     string `json:"file"`
+		Line     int    `json:"line"`
+	}{Function: function, File: file, Line: line})
 }
 
 // @intent represent an ordered stack trace that can be rendered or serialized with an error.
@@ -47,9 +100,10 @@ func (fs Frames) String() string {
 		if i > 0 {
 			b.WriteString(" <- ")
 		}
-		b.WriteString(f.File)
+		_, file, line := f.resolve()
+		b.WriteString(file)
 		b.WriteString(":")
-		b.WriteString(strconv.Itoa(f.Line))
+		b.WriteString(strconv.Itoa(line))
 	}
 	b.WriteString("]")
 	return b.String()
@@ -158,10 +212,11 @@ func (e *TraceError) LogValue() slog.Value {
 func framesToSerializable(frames Frames) []map[string]any {
 	result := make([]map[string]any, len(frames))
 	for i, f := range frames {
+		function, file, line := f.resolve()
 		result[i] = map[string]any{
-			"file": f.File,
-			"line": f.Line,
-			"func": f.Function,
+			"file": file,
+			"line": line,
+			"func": function,
 		}
 	}
 	return result
@@ -176,22 +231,14 @@ func framesToSerializable(frames Frames) []map[string]any {
 // caller, and 2 is the caller of that function. Constructors that want the
 // frame to point at their own caller pass 2.
 func CaptureFrame(skip int) Frame {
-	pc, file, line, ok := runtime.Caller(skip)
-	if !ok {
+	var pcs [1]uintptr
+	// runtime.Callers skip is offset by one from runtime.Caller: 0 identifies
+	// runtime.Callers itself, so skip+1 keeps this function's documented
+	// runtime.Caller-style contract.
+	if runtime.Callers(skip+1, pcs[:]) == 0 {
 		return Frame{}
 	}
-
-	fn := runtime.FuncForPC(pc)
-	funcName := "unknown"
-	if fn != nil {
-		funcName = filepath.Base(fn.Name())
-	}
-
-	return Frame{
-		Function: funcName,
-		File:     filepath.Base(file),
-		Line:     line,
-	}
+	return Frame{pc: pcs[0]}
 }
 
 // @intent preserve the original error while adding call-site debugging context.
