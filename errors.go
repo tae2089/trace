@@ -251,12 +251,12 @@ func (e *TimeoutError) Unwrap() error { return e.TraceError }
 // @ensures returns a TraceError that prepends the supplied frame and carries forward existing fields.
 func wrapTypedInternal(err error, msg string, frame Frame) *TraceError {
 	var existingFrames Frames
-	existingFields := make(map[string]any)
+	var existingFields map[string]any
 	var te *TraceError
 	if err != nil && errors.As(err, &te) {
 		existingFrames = te.Frames
-		for k, v := range te.Fields {
-			existingFields[k] = v
+		if len(te.Fields) > 0 {
+			existingFields = copyFields(te.Fields)
 		}
 	}
 	return &TraceError{
@@ -270,7 +270,6 @@ func wrapTypedInternal(err error, msg string, frame Frame) *TraceError {
 // @intent classify a missing resource so callers can branch on lookup failure semantics.
 // @domainRule not found errors are classified as HTTP 404 by the tracehttp package.
 // @ensures records the current call site as the first trace frame.
-// @ensures returns a NotFoundError with initialized structured fields.
 // NotFound creates a new NotFoundError
 func NotFound(msgAndArgs ...any) error {
 	frame := CaptureFrame(2)
@@ -278,7 +277,6 @@ func NotFound(msgAndArgs ...any) error {
 		TraceError: &TraceError{
 			Message: formatMessage(msgAndArgs...),
 			Frames:  Frames{frame},
-			Fields:  make(map[string]any),
 		},
 	}
 }
@@ -307,7 +305,6 @@ func AlreadyExists(msgAndArgs ...any) error {
 		TraceError: &TraceError{
 			Message: formatMessage(msgAndArgs...),
 			Frames:  Frames{frame},
-			Fields:  make(map[string]any),
 		},
 	}
 }
@@ -336,7 +333,6 @@ func BadParameter(msgAndArgs ...any) error {
 		TraceError: &TraceError{
 			Message: formatMessage(msgAndArgs...),
 			Frames:  Frames{frame},
-			Fields:  make(map[string]any),
 		},
 	}
 }
@@ -365,7 +361,6 @@ func NotImplemented(msgAndArgs ...any) error {
 		TraceError: &TraceError{
 			Message: formatMessage(msgAndArgs...),
 			Frames:  Frames{frame},
-			Fields:  make(map[string]any),
 		},
 	}
 }
@@ -380,7 +375,6 @@ func Unauthenticated(msgAndArgs ...any) error {
 		TraceError: &TraceError{
 			Message: formatMessage(msgAndArgs...),
 			Frames:  Frames{frame},
-			Fields:  make(map[string]any),
 		},
 	}
 }
@@ -401,7 +395,6 @@ func WrapUnauthenticated(err error, msgAndArgs ...any) error {
 // @intent classify authorization failures so callers can deny access consistently.
 // @domainRule access denied errors are classified as HTTP 403 by the tracehttp package.
 // @ensures records the current call site as the first trace frame.
-// @ensures returns an AccessDeniedError with initialized structured fields.
 // AccessDenied creates a new AccessDeniedError
 func AccessDenied(msgAndArgs ...any) error {
 	frame := CaptureFrame(2)
@@ -409,7 +402,6 @@ func AccessDenied(msgAndArgs ...any) error {
 		TraceError: &TraceError{
 			Message: formatMessage(msgAndArgs...),
 			Frames:  Frames{frame},
-			Fields:  make(map[string]any),
 		},
 	}
 }
@@ -438,7 +430,6 @@ func Conflict(msgAndArgs ...any) error {
 		TraceError: &TraceError{
 			Message: formatMessage(msgAndArgs...),
 			Frames:  Frames{frame},
-			Fields:  make(map[string]any),
 		},
 	}
 }
@@ -469,7 +460,6 @@ func LimitExceeded(msgAndArgs ...any) error {
 		TraceError: &TraceError{
 			Message: formatMessage(msgAndArgs...),
 			Frames:  Frames{frame},
-			Fields:  make(map[string]any),
 		},
 	}
 }

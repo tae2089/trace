@@ -223,7 +223,6 @@ func Wrap(err error, msg ...string) error {
 		Err:     err,
 		Message: message,
 		Frames:  append(Frames{frame}, existingFrames...),
-		Fields:  make(map[string]any),
 	}
 }
 
@@ -251,7 +250,6 @@ func wrapInternal(err error, msg string, frame Frame) error {
 		Err:     err,
 		Message: msg,
 		Frames:  append(Frames{frame}, existingFrames...),
-		Fields:  make(map[string]any),
 	}
 }
 
@@ -266,37 +264,33 @@ func WrapWithFields(err error, fields map[string]any, msg ...string) error {
 	}
 
 	wrapped := Wrap(err, msg...)
-	if te, ok := wrapped.(*TraceError); ok {
-		for k, v := range fields {
-			te.Fields[k] = v
-		}
+	if te, ok := wrapped.(*TraceError); ok && len(fields) > 0 {
+		te.Fields = copyFields(fields)
 	}
 	return wrapped
 }
 
 // @intent create a fresh traceable application error at the current call site.
 // @ensures records the current call site as the first trace frame.
-// @ensures returns a TraceError with initialized fields storage.
+// @ensures allocates structured fields storage lazily on first field attachment.
 // New creates a new error with stack trace
 func New(msg string) error {
 	frame := CaptureFrame(2)
 	return &TraceError{
 		Message: msg,
 		Frames:  Frames{frame},
-		Fields:  make(map[string]any),
 	}
 }
 
 // @intent create a traceable error from formatted application context.
 // @ensures records the current call site as the first trace frame.
-// @ensures returns a TraceError with initialized fields storage.
+// @ensures allocates structured fields storage lazily on first field attachment.
 // Errorf creates a new error with formatted message and stack trace
 func Errorf(format string, args ...any) error {
 	frame := CaptureFrame(2)
 	return &TraceError{
 		Message: fmt.Sprintf(format, args...),
 		Frames:  Frames{frame},
-		Fields:  make(map[string]any),
 	}
 }
 
@@ -370,7 +364,7 @@ func WithField(err error, key string, value any) error {
 
 	wrapped := Wrap(err)
 	if wte, ok := wrapped.(*TraceError); ok {
-		wte.Fields[key] = value
+		wte.Fields = map[string]any{key: value}
 	}
 	return wrapped
 }
@@ -396,10 +390,8 @@ func WithFields(err error, fields map[string]any) error {
 	}
 
 	wrapped := Wrap(err)
-	if wte, ok := wrapped.(*TraceError); ok {
-		for k, v := range fields {
-			wte.Fields[k] = v
-		}
+	if wte, ok := wrapped.(*TraceError); ok && len(fields) > 0 {
+		wte.Fields = copyFields(fields)
 	}
 	return wrapped
 }

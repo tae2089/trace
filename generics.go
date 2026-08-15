@@ -35,7 +35,6 @@ func ErrMsg[T any](msg string) Result[T] {
 		err: &TraceError{
 			Message: msg,
 			Frames:  Frames{frame},
-			Fields:  make(map[string]any),
 		},
 	}
 }
@@ -138,7 +137,6 @@ func Try[T any](value T, err error) Result[T] {
 			err: &TraceError{
 				Err:    err,
 				Frames: Frames{frame},
-				Fields: make(map[string]any),
 			},
 		}
 	}

@@ -121,6 +121,38 @@ func TestWrapPreservesType(t *testing.T) {
 	}
 }
 
+// WrapWithFields and the WithField fallback path both write into the fields
+// map of a freshly created TraceError, so they must work even when the
+// constructor did not allocate one.
+func TestFieldWritesOnFreshErrors(t *testing.T) {
+	t.Run("WrapWithFields", func(t *testing.T) {
+		err := trace.WrapWithFields(errors.New("boom"), map[string]any{"a": 1}, "failed")
+		if fields := trace.GetFields(err); fields["a"] != 1 {
+			t.Fatalf("expected field a=1, got %v", fields)
+		}
+	})
+
+	t.Run("WithField on a non-trace error", func(t *testing.T) {
+		err := trace.WithField(errors.New("boom"), "b", 2)
+		if fields := trace.GetFields(err); fields["b"] != 2 {
+			t.Fatalf("expected field b=2, got %v", fields)
+		}
+	})
+
+	t.Run("WithFields on a non-trace error", func(t *testing.T) {
+		err := trace.WithFields(errors.New("boom"), map[string]any{"c": 3})
+		if fields := trace.GetFields(err); fields["c"] != 3 {
+			t.Fatalf("expected field c=3, got %v", fields)
+		}
+	})
+
+	t.Run("GetFields on a plain wrap is non-nil", func(t *testing.T) {
+		if fields := trace.GetFields(trace.Wrap(errors.New("boom"))); fields == nil {
+			t.Fatal("GetFields on a trace error must return a non-nil map")
+		}
+	})
+}
+
 // Example: With fields for structured logging
 func TestWithFields(t *testing.T) {
 	err := trace.NotFound("user not found")
