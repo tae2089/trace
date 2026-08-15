@@ -397,35 +397,6 @@ type User struct {
 	ID string
 }
 
-// Benchmark
-func BenchmarkWrap(b *testing.B) {
-	err := errors.New("original error")
-	b.ResetTimer()
-	for range b.N {
-		_ = trace.Wrap(err, "wrapped")
-	}
-}
-
-func BenchmarkWrapChain(b *testing.B) {
-	err := errors.New("original error")
-	b.ResetTimer()
-	for range b.N {
-		e := trace.Wrap(err, "level 1")
-		e = trace.Wrap(e, "level 2")
-		e = trace.Wrap(e, "level 3")
-		_ = e
-	}
-}
-
-func BenchmarkIsNotFound(b *testing.B) {
-	err := trace.NotFound("not found")
-	err = trace.Wrap(err, "wrapped")
-	b.ResetTimer()
-	for range b.N {
-		_ = trace.IsNotFound(err)
-	}
-}
-
 // Example output
 func ExampleWrap() {
 	err := errors.New("connection refused")
