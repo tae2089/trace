@@ -3,7 +3,6 @@ package trace
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 )
 
@@ -17,8 +16,7 @@ func SlogError(err error) slog.Attr {
 		return slog.Attr{}
 	}
 
-	var te *TraceError
-	if errors.As(err, &te) {
+	if te := findTraceError(err); te != nil {
 		attrs := []slog.Attr{
 			slog.String("message", te.Message),
 			slog.Any("cause", errorCause(te.Err)),
@@ -55,8 +53,7 @@ func SlogErrorValue(err error) slog.Value {
 		return slog.StringValue("")
 	}
 
-	var te *TraceError
-	if errors.As(err, &te) {
+	if te := findTraceError(err); te != nil {
 		return te.LogValue()
 	}
 

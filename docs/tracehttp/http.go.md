@@ -1,26 +1,60 @@
 <!-- generated-by: code-context-graph docs -->
-# http.go
+# tracehttp/http.go
 
 > HTTP adapters that translate trace errors into API responses, middleware behavior, and client-side classifications.
 
 ## Functions
 
 ### ToHTTPError
-- **Lines:** 63–81
+- **Lines:** 79–97
 - **Intent:** classify an error chain into a validated client-safe HTTP representation.
 - **Domain Rules:**
+  - the outermost classifiable link in the chain decides the response, so an
+outer AccessDenied wrap is never overridden by an inner NotFound.
   - invalid classifications become internal errors and every 5xx message is sanitized.
 - **Ensures:**
   - returns the zero value for nil and never derives a message from an outer trace wrapper.
 ToHTTPError returns the safe HTTP representation for err.
-- **Calls:** As, internalHTTPError, internalHTTPError
+- **Calls:** Errors, classify, aggregateHTTPError, validate, validate, internalHTTPError, HTTPError
+
+### classify
+- **Lines:** 102–153
+- **Intent:** classify exactly one error value without following its Unwrap chain.
+- **Domain Rules:**
+  - categories are tested in a fixed order so an error implementing several
+behavior interfaces always produces the same status.
+- **Calls:** linkMessage
+
+### linkMessage
+- **Lines:** 156–162
+- **Intent:** read the message this specific error carries, never the message of an outer wrapper.
+
+### aggregateHTTPError
+- **Lines:** 166–177
+- **Intent:** choose the safe representation with the highest child status for an aggregate failure.
+- **Domain Rules:**
+  - the most severe child wins rather than the first one traversed.
+- **Calls:** Unwrap, ToHTTPError, internalHTTPError
+
+### validate
+- **Lines:** 180–191
+- **Intent:** reject malformed classifications and keep server-side detail out of 5xx responses.
+- **Calls:** internalHTTPError
 
 ### internalHTTPError
-- **Lines:** 84–90
+- **Lines:** 194–200
 - **Intent:** centralize the generic fallback used whenever a failure cannot be exposed safely.
 
+### GetHTTPStatusCode
+- **Lines:** 205–210
+- **Intent:** translate trace error categories into HTTP response codes at service boundaries.
+- **Ensures:**
+  - returns HTTP 200 for nil errors and HTTP 500 for unclassifiable errors.
+GetHTTPStatusCode returns the HTTP status code for an error.
+- **Calls:** ToHTTPError
+
 ### ErrorResponseFor
-- **Lines:** 110–123
+- **Lines:** 230–243
 - **Intent:** build a framework-neutral response from the safe HTTP classification.
 - **Domain Rules:**
   - request IDs are caller-supplied and trace fields or details are never copied from err.
@@ -30,7 +64,7 @@ ErrorResponseFor returns the status and safe response body for err.
 - **Calls:** ToHTTPError
 
 ### WriteError
-- **Lines:** 129–138
+- **Lines:** 249–258
 - **Intent:** expose a simple entry point for converting domain errors into HTTP responses.
 - **Side Effects:** writes status code, headers, and a JSON body to the response writer.
 - **Ensures:**
@@ -38,151 +72,139 @@ ErrorResponseFor returns the status and safe response body for err.
 WriteError writes a safe error response without logging.
 - **Calls:** ErrorResponseFor
 
-### WriteErrorWithLogger
-- **Lines:** 144–162
-- **Intent:** retain the legacy opt-in logging adapter while directing new callers to application-owned logging.
-WriteErrorWithLogger writes an error response and logs it.
-- **Calls:** ToHTTPError, WriteError, Error, Error, SlogError
-
 ### ErrorMiddleware
-- **Lines:** 171–184
+- **Lines:** 268–281
 - **Intent:** adapt error-returning handlers into standard net/http handlers.
-- **Ensures:**
-  - renders handler errors through the logger-free safe response writer.
-ErrorMiddleware converts an ErrorHandlerFunc to a standard http.HandlerFunc
-- **Calls:** WriteError, WithFields
-
-### ErrorMiddlewareWithLogger
-- **Lines:** 192–204
-- **Intent:** normalize handler failures into traced HTTP responses enriched with request metadata.
 - **Side Effects:** attaches method and path fields before writing the HTTP error response.
 - **Ensures:**
-  - successful handlers pass through without writing an additional error response.
-ErrorMiddlewareWithLogger converts an ErrorHandlerFunc to http.HandlerFunc with logging.
-- **Calls:** WriteErrorWithLogger, WithFields
-
-### RecoverMiddleware
-- **Lines:** 212–251
-- **Intent:** prevent panics from escaping the HTTP boundary and turn them into traceable server errors.
-- **Domain Rules:**
-  - recovered panics always return HTTP 500 with a generic client-facing message.
-- **Side Effects:** recovers panics, logs structured diagnostics, and writes a fallback JSON response.
-RecoverMiddleware recovers from panics and converts them to errors.
-- **Calls:** Error, Error, SlogError, Wrap, Errorf, WithFields
+  - renders handler errors through the logger-free safe response writer.
+ErrorMiddleware converts an ErrorHandlerFunc to a standard http.HandlerFunc.
+- **Calls:** WithFields, WriteError
 
 ### ReadErrorResponse
-- **Lines:** 257–329
+- **Lines:** 287–359
 - **Intent:** restore typed trace semantics from the public ErrorResponse envelope without deserializing internal trace data.
 - **Domain Rules:**
   - HTTP 2xx and 3xx statuses are not errors.
   - malformed, unknown, or status-mismatched responses fail closed without retaining the raw body.
 ReadErrorResponse converts a public HTTP error response into a trace error.
-- **Calls:** errorCodeMatchesStatus, newReadErrorResponseTrace, newReadErrorResponseTrace, newReadErrorResponseTrace, newReadErrorResponseTrace, captureFrame
-
-### errorCodeMatchesStatus
-- **Lines:** 332–359
-- **Intent:** validate the public code and HTTP status as one coherent wire contract.
+- **Calls:** CaptureFrame, newReadErrorResponseTrace, newReadErrorResponseTrace, newReadErrorResponseTrace, newReadErrorResponseTrace, errorCodeMatchesStatus
 
 ### newReadErrorResponseTrace
-- **Lines:** 362–377
-- **Intent:** construct a fresh local trace from only the safe response metadata allowed across the HTTP boundary.
+- **Lines:** 362–372
+- **Intent:** build the trace error that carries the safe message and upstream response metadata.
+
+### errorCodeMatchesStatus
+- **Lines:** 375–402
+- **Intent:** validate the public code and HTTP status as one coherent wire contract.
 
 ### FromHTTPResponse
-- **Lines:** 384–427
-- **Intent:** retain legacy status-based classification for plain-text upstream responses.
+- **Lines:** 412–451
+- **Intent:** classify an upstream response for developer-facing debugging rather than client rendering.
 - **Domain Rules:**
   - 2xx responses are not errors, while known status codes map to typed trace errors.
 - **Ensures:**
   - records the current call site as the first trace frame and stores upstream status metadata in error fields.
 FromHTTPResponse creates an appropriate error from an HTTP response.
-It retains body in the developer-facing error; prefer ReadErrorResponse for the safe JSON envelope.
-- **Calls:** captureFrame
+- **Calls:** CaptureFrame
 
 ### IsHTTPError
-- **Lines:** 432–434
+- **Lines:** 456–458
 - **Intent:** test whether an error chain resolves to a specific HTTP status mapping.
 - **Ensures:**
   - delegates status resolution to GetHTTPStatusCode.
-IsHTTPError checks if an error corresponds to a specific HTTP status code
+IsHTTPError checks if an error corresponds to a specific HTTP status code.
 - **Calls:** GetHTTPStatusCode
 
 ### WrapHTTPError
-- **Lines:** 440–460
+- **Lines:** 466–491
 - **Intent:** override or attach explicit HTTP status semantics to an existing error chain.
 - **Domain Rules:**
   - returns nil unchanged when the source error is nil.
 - **Mutates:** adds http_status metadata to the returned traced wrapper.
-WrapHTTPError wraps an error with HTTP status code information
-- **Calls:** wrapTypedInternal, captureFrame
+- **Ensures:**
+  - the returned error accumulates the caller frame on top of the source frames and
+carries the source fields forward, so GetFrames and GetFields stay useful after wrapping.
+WrapHTTPError wraps an error with HTTP status code information.
+- **Calls:** CaptureFrame, GetFrames, GetFields
 
-### HTTPStatusCode
-- **Lines:** 469–469
-- **Intent:** expose the explicit status override carried by this internal HTTP error wrapper.
+### HTTPError
+- **Lines:** 500–506
+- **Intent:** expose the explicit status override through the single HTTP extension point.
+- **Calls:** UserMessage
 
 ### Error
-- **Lines:** 472–472
-- **Intent:** delegate user-facing string rendering to the embedded TraceError.
+- **Lines:** 509–509
+- **Intent:** delegate user-facing string rendering to the wrapped error.
 - **Calls:** Error
 
 ### Unwrap
-- **Lines:** 475–475
-- **Intent:** expose the embedded TraceError to standard Go error traversal.
+- **Lines:** 512–512
+- **Intent:** expose the wrapped error to standard Go error traversal.
+
+### ReplaceTraceError
+- **Lines:** 518–523
+- **Intent:** keep the explicit status override alive when trace.WithField or trace.WithFields rebuild the chain.
+- **Ensures:**
+  - returns ok=false when original is not this wrapper's direct inner TraceError.
+ReplaceTraceError implements trace.TraceErrorReplacer so the status override
+survives field updates.
 
 ### NewClient
-- **Lines:** 486–491
+- **Lines:** 534–539
 - **Intent:** provide an HTTP client wrapper that returns trace-classified transport failures.
 - **Ensures:**
   - falls back to http.DefaultClient when no custom client is supplied.
-NewClient creates a new trace-aware HTTP client
+NewClient creates a new trace-aware HTTP client.
 
 ### Do
-- **Lines:** 497–507
+- **Lines:** 545–554
 - **Intent:** classify outbound HTTP transport failures into timeout or connection problem errors.
 - **Domain Rules:**
   - deadline exceeded maps to Timeout and other transport failures map to ConnectionProblem.
 - **Side Effects:** executes the underlying HTTP request through the wrapped client.
-Do executes the request and wraps any errors with trace information
+Do executes the request and wraps any errors with trace information.
 - **Calls:** ConnectionProblem, Timeout, Do
 
 ## Classes
 
 ### HTTPError
-- **Lines:** 46–50
+- **Lines:** 56–60
 - **Intent:** carry only validated status, semantic code, and client-safe message across an HTTP boundary.
 HTTPError is the safe client-facing representation of an error.
 
 ### ErrorBody
-- **Lines:** 94–98
+- **Lines:** 214–218
 - **Intent:** group safe client fields under one stable JSON error envelope.
 ErrorBody is the stable machine-readable body nested under the error key.
 
 ### ErrorResponse
-- **Lines:** 102–104
+- **Lines:** 222–224
 - **Intent:** define the client-facing error payload returned by HTTP helpers in this package.
 ErrorResponse represents a structured JSON error response.
 
-### httpStatusError
-- **Lines:** 463–466
+### statusError
+- **Lines:** 494–497
 - **Intent:** carry an explicit HTTP status override for errors that do not map to one of the standard typed categories.
 
 ### Client
-- **Lines:** 479–481
+- **Lines:** 527–529
 - **Intent:** wrap http.Client so transport failures come back as trace-classified errors.
-Client is an HTTP client that wraps errors with trace information
+Client is an HTTP client that wraps errors with trace information.
 
 ## Types
 
 ### ErrorCode
-- **Lines:** 15–15
+- **Lines:** 21–21
 - **Intent:** give clients a stable machine-readable classification independent of HTTP status text.
 ErrorCode is a stable machine-readable HTTP error classification.
 
 ### HTTPErrorProvider
-- **Lines:** 54–57
+- **Lines:** 68–71
 - **Intent:** let application-owned error types opt into explicit safe HTTP classification.
 HTTPErrorProvider lets custom errors define a safe HTTP representation.
 
 ### ErrorHandlerFunc
-- **Lines:** 166–166
+- **Lines:** 262–262
 - **Intent:** let HTTP handlers return errors directly so middleware can centralize response rendering.
-ErrorHandlerFunc is a function that handles HTTP requests and may return an error
+ErrorHandlerFunc is a function that handles HTTP requests and may return an error.

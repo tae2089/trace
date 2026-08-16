@@ -8,7 +8,8 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/tae2089/trace"
+	"github.com/tae2089/trace/v2"
+	"github.com/tae2089/trace/v2/tracehttp"
 )
 
 // @intent demonstrate how an application owns request logging while trace renders safe error responses.
@@ -23,10 +24,10 @@ func main() {
 }
 
 // @intent keep request logging policy in the application and delegate only safe response rendering to trace.
-func handle(handler trace.ErrorHandlerFunc) http.HandlerFunc {
+func handle(handler tracehttp.ErrorHandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := handler(w, r); err != nil {
-			httpError := trace.ToHTTPError(err)
+			httpError := tracehttp.ToHTTPError(err)
 			slog.Error("Request failed",
 				trace.SlogError(err),
 				slog.Int("status_code", httpError.Status),
@@ -35,7 +36,7 @@ func handle(handler trace.ErrorHandlerFunc) http.HandlerFunc {
 			)
 
 			requestID := r.Header.Get("X-Request-ID")
-			if writeErr := trace.WriteError(w, err, requestID); writeErr != nil {
+			if writeErr := tracehttp.WriteError(w, err, requestID); writeErr != nil {
 				slog.Error("Failed to write error response", "error", writeErr)
 			}
 		}

@@ -1,4 +1,4 @@
-package trace_test
+package tracehttp_test
 
 import (
 	"context"
@@ -7,15 +7,18 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
-	"github.com/tae2089/trace"
+	"github.com/tae2089/trace/v2"
+	"github.com/tae2089/trace/v2/tracehttp"
 )
 
 type customHTTPError struct {
-	response trace.HTTPError
+	response tracehttp.HTTPError
 }
 
 type failingResponseWriter struct {
@@ -40,7 +43,7 @@ func (e customHTTPError) Error() string {
 	return "custom HTTP error"
 }
 
-func (e customHTTPError) HTTPError() trace.HTTPError {
+func (e customHTTPError) HTTPError() tracehttp.HTTPError {
 	return e.response
 }
 
@@ -49,10 +52,10 @@ func TestToHTTPErrorPreservesTypedPublicMessageThroughWraps(t *testing.T) {
 	err = trace.Wrap(err, "query users table")
 	err = trace.Wrap(err, "handle request")
 
-	got := trace.ToHTTPError(err)
-	want := trace.HTTPError{
+	got := tracehttp.ToHTTPError(err)
+	want := tracehttp.HTTPError{
 		Status:  http.StatusNotFound,
-		Code:    trace.CodeNotFound,
+		Code:    tracehttp.CodeNotFound,
 		Message: "user not found",
 	}
 
@@ -65,11 +68,11 @@ func TestToHTTPErrorHidesInternalError(t *testing.T) {
 	const secret = "password=do-not-expose"
 	err := trace.Wrap(errors.New(secret), "query users table")
 
-	got := trace.ToHTTPError(err)
+	got := tracehttp.ToHTTPError(err)
 
-	if got != (trace.HTTPError{
+	if got != (tracehttp.HTTPError{
 		Status:  http.StatusInternalServerError,
-		Code:    trace.CodeInternal,
+		Code:    tracehttp.CodeInternal,
 		Message: "internal server error",
 	}) {
 		t.Fatalf("ToHTTPError() = %#v", got)
@@ -86,68 +89,68 @@ func TestToHTTPErrorMapsBuiltInCategories(t *testing.T) {
 	tests := []struct {
 		name string
 		err  error
-		want trace.HTTPError
+		want tracehttp.HTTPError
 	}{
 		{
 			name: "bad request",
 			err:  trace.BadParameter("invalid email"),
-			want: trace.HTTPError{Status: http.StatusBadRequest, Code: trace.CodeBadRequest, Message: "invalid email"},
+			want: tracehttp.HTTPError{Status: http.StatusBadRequest, Code: tracehttp.CodeBadRequest, Message: "invalid email"},
 		},
 		{
 			name: "unauthenticated",
 			err:  trace.Unauthenticated("expired bearer token"),
-			want: trace.HTTPError{Status: http.StatusUnauthorized, Code: trace.CodeUnauthenticated, Message: "authentication required"},
+			want: tracehttp.HTTPError{Status: http.StatusUnauthorized, Code: tracehttp.CodeUnauthenticated, Message: "authentication required"},
 		},
 		{
 			name: "access denied",
 			err:  trace.AccessDenied("missing admin role"),
-			want: trace.HTTPError{Status: http.StatusForbidden, Code: trace.CodeAccessDenied, Message: "access denied"},
+			want: tracehttp.HTTPError{Status: http.StatusForbidden, Code: tracehttp.CodeAccessDenied, Message: "access denied"},
 		},
 		{
 			name: "not found",
 			err:  trace.NotFound("user not found"),
-			want: trace.HTTPError{Status: http.StatusNotFound, Code: trace.CodeNotFound, Message: "user not found"},
+			want: tracehttp.HTTPError{Status: http.StatusNotFound, Code: tracehttp.CodeNotFound, Message: "user not found"},
 		},
 		{
 			name: "already exists",
 			err:  trace.AlreadyExists("email already registered"),
-			want: trace.HTTPError{Status: http.StatusConflict, Code: trace.CodeAlreadyExists, Message: "email already registered"},
+			want: tracehttp.HTTPError{Status: http.StatusConflict, Code: tracehttp.CodeAlreadyExists, Message: "email already registered"},
 		},
 		{
 			name: "conflict",
 			err:  trace.Conflict("version mismatch"),
-			want: trace.HTTPError{Status: http.StatusConflict, Code: trace.CodeConflict, Message: "version mismatch"},
+			want: tracehttp.HTTPError{Status: http.StatusConflict, Code: tracehttp.CodeConflict, Message: "version mismatch"},
 		},
 		{
 			name: "limit exceeded",
 			err:  trace.LimitExceeded("quota exceeded"),
-			want: trace.HTTPError{Status: http.StatusTooManyRequests, Code: trace.CodeLimitExceeded, Message: "quota exceeded"},
+			want: tracehttp.HTTPError{Status: http.StatusTooManyRequests, Code: tracehttp.CodeLimitExceeded, Message: "quota exceeded"},
 		},
 		{
 			name: "canceled",
 			err:  trace.FromContext(canceledContext),
-			want: trace.HTTPError{Status: 499, Code: trace.CodeCanceled, Message: "request canceled"},
+			want: tracehttp.HTTPError{Status: 499, Code: tracehttp.CodeCanceled, Message: "request canceled"},
 		},
 		{
 			name: "not implemented",
 			err:  trace.NotImplemented("admin export is unfinished"),
-			want: trace.HTTPError{Status: http.StatusNotImplemented, Code: trace.CodeNotImplemented, Message: "internal server error"},
+			want: tracehttp.HTTPError{Status: http.StatusNotImplemented, Code: tracehttp.CodeNotImplemented, Message: "internal server error"},
 		},
 		{
 			name: "unavailable",
 			err:  trace.ConnectionProblem(errors.New("dial tcp database.internal"), "database unavailable"),
-			want: trace.HTTPError{Status: http.StatusServiceUnavailable, Code: trace.CodeUnavailable, Message: "internal server error"},
+			want: tracehttp.HTTPError{Status: http.StatusServiceUnavailable, Code: tracehttp.CodeUnavailable, Message: "internal server error"},
 		},
 		{
 			name: "timeout",
 			err:  trace.Timeout(errors.New("upstream deadline"), "inventory request timed out"),
-			want: trace.HTTPError{Status: http.StatusGatewayTimeout, Code: trace.CodeTimeout, Message: "internal server error"},
+			want: tracehttp.HTTPError{Status: http.StatusGatewayTimeout, Code: tracehttp.CodeTimeout, Message: "internal server error"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := trace.ToHTTPError(tt.err)
+			got := tracehttp.ToHTTPError(tt.err)
 			if got != tt.want {
 				t.Fatalf("ToHTTPError() = %#v, want %#v", got, tt.want)
 			}
@@ -157,16 +160,16 @@ func TestToHTTPErrorMapsBuiltInCategories(t *testing.T) {
 
 func TestToHTTPErrorSupportsValidatedCustomProviders(t *testing.T) {
 	t.Run("wrapped custom provider", func(t *testing.T) {
-		err := trace.Wrap(customHTTPError{response: trace.HTTPError{
+		err := trace.Wrap(customHTTPError{response: tracehttp.HTTPError{
 			Status:  http.StatusTeapot,
-			Code:    trace.ErrorCode("teapot"),
+			Code:    tracehttp.ErrorCode("teapot"),
 			Message: "short and stout",
 		}}, "internal context")
 
-		got := trace.ToHTTPError(err)
-		want := trace.HTTPError{
+		got := tracehttp.ToHTTPError(err)
+		want := tracehttp.HTTPError{
 			Status:  http.StatusTeapot,
-			Code:    trace.ErrorCode("teapot"),
+			Code:    tracehttp.ErrorCode("teapot"),
 			Message: "short and stout",
 		}
 		if got != want {
@@ -176,29 +179,29 @@ func TestToHTTPErrorSupportsValidatedCustomProviders(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		provided trace.HTTPError
-		want     trace.HTTPError
+		provided tracehttp.HTTPError
+		want     tracehttp.HTTPError
 	}{
 		{
 			name:     "status below error range",
-			provided: trace.HTTPError{Status: http.StatusOK, Code: trace.ErrorCode("success"), Message: "unsafe"},
-			want:     trace.HTTPError{Status: http.StatusInternalServerError, Code: trace.CodeInternal, Message: "internal server error"},
+			provided: tracehttp.HTTPError{Status: http.StatusOK, Code: tracehttp.ErrorCode("success"), Message: "unsafe"},
+			want:     tracehttp.HTTPError{Status: http.StatusInternalServerError, Code: tracehttp.CodeInternal, Message: "internal server error"},
 		},
 		{
 			name:     "empty code",
-			provided: trace.HTTPError{Status: http.StatusTeapot, Message: "unsafe"},
-			want:     trace.HTTPError{Status: http.StatusInternalServerError, Code: trace.CodeInternal, Message: "internal server error"},
+			provided: tracehttp.HTTPError{Status: http.StatusTeapot, Message: "unsafe"},
+			want:     tracehttp.HTTPError{Status: http.StatusInternalServerError, Code: tracehttp.CodeInternal, Message: "internal server error"},
 		},
 		{
 			name:     "custom 5xx message",
-			provided: trace.HTTPError{Status: http.StatusServiceUnavailable, Code: trace.ErrorCode("dependency_down"), Message: "redis password=secret"},
-			want:     trace.HTTPError{Status: http.StatusServiceUnavailable, Code: trace.ErrorCode("dependency_down"), Message: "internal server error"},
+			provided: tracehttp.HTTPError{Status: http.StatusServiceUnavailable, Code: tracehttp.ErrorCode("dependency_down"), Message: "redis password=secret"},
+			want:     tracehttp.HTTPError{Status: http.StatusServiceUnavailable, Code: tracehttp.ErrorCode("dependency_down"), Message: "internal server error"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := trace.ToHTTPError(customHTTPError{response: tt.provided})
+			got := tracehttp.ToHTTPError(customHTTPError{response: tt.provided})
 			if got != tt.want {
 				t.Fatalf("ToHTTPError() = %#v, want %#v", got, tt.want)
 			}
@@ -213,10 +216,10 @@ func TestErrorResponseForBuildsSafeNestedBody(t *testing.T) {
 	})
 	err = trace.Wrap(err, "query users table")
 
-	status, got := trace.ErrorResponseFor(err, "01KREQUEST")
-	want := trace.ErrorResponse{
-		Error: trace.ErrorBody{
-			Code:      trace.CodeNotFound,
+	status, got := tracehttp.ErrorResponseFor(err, "01KREQUEST")
+	want := tracehttp.ErrorResponse{
+		Error: tracehttp.ErrorBody{
+			Code:      tracehttp.CodeNotFound,
 			Message:   "user not found",
 			RequestID: "01KREQUEST",
 		},
@@ -239,7 +242,7 @@ func TestErrorResponseForBuildsSafeNestedBody(t *testing.T) {
 }
 
 func TestErrorResponseForOmitsEmptyRequestID(t *testing.T) {
-	status, got := trace.ErrorResponseFor(trace.BadParameter("invalid email"), "")
+	status, got := tracehttp.ErrorResponseFor(trace.BadParameter("invalid email"), "")
 	if status != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", status, http.StatusBadRequest)
 	}
@@ -263,7 +266,7 @@ func TestWriteErrorWritesSafeResponseWithoutLogging(t *testing.T) {
 	})
 
 	recorder := httptest.NewRecorder()
-	err := trace.WriteError(recorder, trace.NotFound("user not found"), "01KREQUEST")
+	err := tracehttp.WriteError(recorder, trace.NotFound("user not found"), "01KREQUEST")
 	if err != nil {
 		t.Fatalf("WriteError() error = %v", err)
 	}
@@ -285,7 +288,7 @@ func TestWriteErrorWritesSafeResponseWithoutLogging(t *testing.T) {
 func TestWriteErrorHandlesNilAndWriteFailure(t *testing.T) {
 	t.Run("nil is a no-op", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
-		if err := trace.WriteError(recorder, nil, "01KREQUEST"); err != nil {
+		if err := tracehttp.WriteError(recorder, nil, "01KREQUEST"); err != nil {
 			t.Fatalf("WriteError(nil) error = %v", err)
 		}
 		if recorder.Body.Len() != 0 {
@@ -300,7 +303,7 @@ func TestWriteErrorHandlesNilAndWriteFailure(t *testing.T) {
 			err:    wantErr,
 		}
 
-		gotErr := trace.WriteError(writer, trace.NotFound("user not found"), "")
+		gotErr := tracehttp.WriteError(writer, trace.NotFound("user not found"), "")
 		if !errors.Is(gotErr, wantErr) {
 			t.Fatalf("WriteError() error = %v, want %v", gotErr, wantErr)
 		}
@@ -314,20 +317,20 @@ func TestFromHTTPResponseDistinguishesAuthenticationAndAuthorization(t *testing.
 	tests := []struct {
 		name                string
 		status              int
-		wantCode            trace.ErrorCode
+		wantCode            tracehttp.ErrorCode
 		wantUnauthenticated bool
 		wantAccessDenied    bool
 	}{
 		{
 			name:                "unauthorized",
 			status:              http.StatusUnauthorized,
-			wantCode:            trace.CodeUnauthenticated,
+			wantCode:            tracehttp.CodeUnauthenticated,
 			wantUnauthenticated: true,
 		},
 		{
 			name:             "forbidden",
 			status:           http.StatusForbidden,
-			wantCode:         trace.CodeAccessDenied,
+			wantCode:         tracehttp.CodeAccessDenied,
 			wantAccessDenied: true,
 		},
 	}
@@ -339,14 +342,14 @@ func TestFromHTTPResponseDistinguishesAuthenticationAndAuthorization(t *testing.
 				Status:     http.StatusText(tt.status),
 			}
 
-			err := trace.FromHTTPResponse(response, []byte("upstream diagnostic"))
+			err := tracehttp.FromHTTPResponse(response, []byte("upstream diagnostic"))
 			if trace.IsUnauthenticated(err) != tt.wantUnauthenticated {
 				t.Fatalf("IsUnauthenticated() = %v", trace.IsUnauthenticated(err))
 			}
 			if trace.IsAccessDenied(err) != tt.wantAccessDenied {
 				t.Fatalf("IsAccessDenied() = %v", trace.IsAccessDenied(err))
 			}
-			if got := trace.ToHTTPError(err).Code; got != tt.wantCode {
+			if got := tracehttp.ToHTTPError(err).Code; got != tt.wantCode {
 				t.Fatalf("code = %q, want %q", got, tt.wantCode)
 			}
 		})
@@ -359,10 +362,10 @@ func TestToHTTPErrorPreservesAggregateStatusPriority(t *testing.T) {
 		trace.Timeout(errors.New("upstream deadline"), "inventory timed out"),
 	)
 
-	got := trace.ToHTTPError(err)
-	want := trace.HTTPError{
+	got := tracehttp.ToHTTPError(err)
+	want := tracehttp.HTTPError{
 		Status:  http.StatusGatewayTimeout,
-		Code:    trace.CodeTimeout,
+		Code:    tracehttp.CodeTimeout,
 		Message: "internal server error",
 	}
 	if got != want {
@@ -377,7 +380,7 @@ func TestReadErrorResponseReturnsNilForNonErrorStatus(t *testing.T) {
 		http.StatusMovedPermanently,
 	} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
-			err := trace.ReadErrorResponse(status, []byte("not JSON"))
+			err := tracehttp.ReadErrorResponse(status, []byte("not JSON"))
 			if err != nil {
 				t.Fatalf("ReadErrorResponse() error = %v, want nil", err)
 			}
@@ -417,27 +420,27 @@ func TestReadErrorResponseRoundTripsBuiltInCodes(t *testing.T) {
 			name:      "internal",
 			sourceErr: errors.New("database password must remain hidden"),
 			matches: func(err error) bool {
-				return trace.ToHTTPError(err).Code == trace.CodeInternal
+				return tracehttp.ToHTTPError(err).Code == tracehttp.CodeInternal
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			status, response := trace.ErrorResponseFor(tt.sourceErr, "01KREQUEST")
+			status, response := tracehttp.ErrorResponseFor(tt.sourceErr, "01KREQUEST")
 			body, err := json.Marshal(response)
 			if err != nil {
 				t.Fatalf("Marshal() error = %v", err)
 			}
 
-			gotErr := trace.ReadErrorResponse(status, body)
+			gotErr := tracehttp.ReadErrorResponse(status, body)
 			if gotErr == nil {
 				t.Fatal("ReadErrorResponse() error = nil")
 			}
 			if !tt.matches(gotErr) {
 				t.Fatalf("ReadErrorResponse() type = %T, predicate did not match", gotErr)
 			}
-			if got, want := trace.ToHTTPError(gotErr), trace.ToHTTPError(tt.sourceErr); got != want {
+			if got, want := tracehttp.ToHTTPError(gotErr), tracehttp.ToHTTPError(tt.sourceErr); got != want {
 				t.Fatalf("ToHTTPError() = %#v, want %#v", got, want)
 			}
 
@@ -467,7 +470,7 @@ func TestReadErrorResponseKeepsOnlySafeEnvelopeFields(t *testing.T) {
 		"fields": {"trace_id": "must-not-copy"}
 	}`)
 
-	err := trace.ReadErrorResponse(http.StatusNotFound, body)
+	err := tracehttp.ReadErrorResponse(http.StatusNotFound, body)
 	if !trace.IsNotFound(err) {
 		t.Fatalf("ReadErrorResponse() type = %T, want not found", err)
 	}
@@ -492,73 +495,73 @@ func TestReadErrorResponseNormalizesSensitiveMessages(t *testing.T) {
 	tests := []struct {
 		name    string
 		status  int
-		code    trace.ErrorCode
+		code    tracehttp.ErrorCode
 		want    string
 		matches func(error) bool
 	}{
 		{
 			name:    "unauthenticated",
 			status:  http.StatusUnauthorized,
-			code:    trace.CodeUnauthenticated,
+			code:    tracehttp.CodeUnauthenticated,
 			want:    "authentication required",
 			matches: trace.IsUnauthenticated,
 		},
 		{
 			name:    "access denied",
 			status:  http.StatusForbidden,
-			code:    trace.CodeAccessDenied,
+			code:    tracehttp.CodeAccessDenied,
 			want:    "access denied",
 			matches: trace.IsAccessDenied,
 		},
 		{
 			name:    "canceled",
 			status:  499,
-			code:    trace.CodeCanceled,
+			code:    tracehttp.CodeCanceled,
 			want:    "request canceled",
 			matches: trace.IsCanceled,
 		},
 		{
 			name:    "not implemented",
 			status:  http.StatusNotImplemented,
-			code:    trace.CodeNotImplemented,
+			code:    tracehttp.CodeNotImplemented,
 			want:    "internal server error",
 			matches: trace.IsNotImplemented,
 		},
 		{
 			name:    "unavailable",
 			status:  http.StatusServiceUnavailable,
-			code:    trace.CodeUnavailable,
+			code:    tracehttp.CodeUnavailable,
 			want:    "internal server error",
 			matches: trace.IsConnectionProblem,
 		},
 		{
 			name:    "timeout",
 			status:  http.StatusGatewayTimeout,
-			code:    trace.CodeTimeout,
+			code:    tracehttp.CodeTimeout,
 			want:    "internal server error",
 			matches: trace.IsTimeout,
 		},
 		{
 			name:   "internal",
 			status: http.StatusInternalServerError,
-			code:   trace.CodeInternal,
+			code:   tracehttp.CodeInternal,
 			want:   "internal server error",
 			matches: func(err error) bool {
-				return trace.ToHTTPError(err).Code == trace.CodeInternal
+				return tracehttp.ToHTTPError(err).Code == tracehttp.CodeInternal
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			body, err := json.Marshal(trace.ErrorResponse{
-				Error: trace.ErrorBody{Code: tt.code, Message: secret},
+			body, err := json.Marshal(tracehttp.ErrorResponse{
+				Error: tracehttp.ErrorBody{Code: tt.code, Message: secret},
 			})
 			if err != nil {
 				t.Fatalf("Marshal() error = %v", err)
 			}
 
-			gotErr := trace.ReadErrorResponse(tt.status, body)
+			gotErr := tracehttp.ReadErrorResponse(tt.status, body)
 			if !tt.matches(gotErr) {
 				t.Fatalf("ReadErrorResponse() type = %T, predicate did not match", gotErr)
 			}
@@ -611,16 +614,16 @@ func TestReadErrorResponseFailsClosed(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := trace.ReadErrorResponse(tt.status, []byte(tt.body))
+			err := tracehttp.ReadErrorResponse(tt.status, []byte(tt.body))
 			if err == nil {
 				t.Fatal("ReadErrorResponse() error = nil")
 			}
-			want := trace.HTTPError{
+			want := tracehttp.HTTPError{
 				Status:  http.StatusInternalServerError,
-				Code:    trace.CodeInternal,
+				Code:    tracehttp.CodeInternal,
 				Message: "internal server error",
 			}
-			if got := trace.ToHTTPError(err); got != want {
+			if got := tracehttp.ToHTTPError(err); got != want {
 				t.Fatalf("ToHTTPError() = %#v, want %#v", got, want)
 			}
 			if got := trace.UserMessage(err); got != "invalid error response" {
@@ -631,5 +634,98 @@ func TestReadErrorResponseFailsClosed(t *testing.T) {
 				t.Fatalf("raw response leaked from %q", err)
 			}
 		})
+	}
+}
+
+// Example: HTTP middleware
+func TestHTTPMiddleware(t *testing.T) {
+	handler := tracehttp.ErrorMiddleware(func(w http.ResponseWriter, r *http.Request) error {
+		return trace.NotFound("resource not found")
+	})
+
+	req := httptest.NewRequest("GET", "/test", nil)
+	rec := httptest.NewRecorder()
+
+	handler(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rec.Code)
+	}
+
+	var resp tracehttp.ErrorResponse
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.Error.Code != tracehttp.CodeNotFound {
+		t.Error("response error code mismatch")
+	}
+}
+
+// P3: WrapHTTPError preserves frames/fields
+func TestWrapHTTPErrorPreservesFramesAndFields(t *testing.T) {
+	inner := trace.Wrap(errors.New("root"), "inner")
+	inner = trace.WithField(inner, "req_id", "r1")
+	innerFrameCount := len(trace.GetFrames(inner))
+
+	wrapped := tracehttp.WrapHTTPError(inner, 503, "service down")
+	wrappedFrames := trace.GetFrames(wrapped)
+	wrappedFields := trace.GetFields(wrapped)
+
+	if len(wrappedFrames) < innerFrameCount+1 {
+		t.Errorf("WrapHTTPError should accumulate frames: got %d, inner had %d", len(wrappedFrames), innerFrameCount)
+	}
+	if wrappedFields["req_id"] != "r1" {
+		t.Error("WrapHTTPError should preserve inner fields")
+	}
+	if wrappedFields["http_status"] != 503 {
+		t.Error("WrapHTTPError should set http_status field")
+	}
+}
+
+func TestToHTTPErrorHidesFilesystemPathsFromConvertedSystemErrors(t *testing.T) {
+	secretPath := filepath.Join(t.TempDir(), "private-key.pem")
+	_, openErr := os.Open(secretPath)
+	if openErr == nil {
+		t.Fatal("expected opening a missing file to fail")
+	}
+
+	converted := trace.ConvertSystemError(openErr)
+	if !trace.IsNotFound(converted) {
+		t.Fatalf("expected a not found error, got %#v", converted)
+	}
+
+	got := tracehttp.ToHTTPError(converted)
+
+	if got.Status != http.StatusNotFound || got.Code != tracehttp.CodeNotFound {
+		t.Fatalf("ToHTTPError() = %#v, want 404/not_found", got)
+	}
+	if strings.Contains(got.Message, secretPath) || strings.Contains(got.Message, "private-key.pem") {
+		t.Fatalf("client message leaked a filesystem path: %q", got.Message)
+	}
+	if got.Message != string(tracehttp.CodeNotFound) {
+		t.Fatalf("expected the generic code fallback, got %q", got.Message)
+	}
+}
+
+// WithField/WithFields must not drop the explicit status override carried by
+// WrapHTTPError's wrapper (github.com/tae2089/trace/v2 TraceErrorReplacer hook).
+func TestWithFieldKeepsStatusOverride(t *testing.T) {
+	base := errors.New("teapot broke")
+	wrapped := tracehttp.WrapHTTPError(base, http.StatusTeapot)
+
+	withField := trace.WithField(wrapped, "req_id", "r1")
+	if got := tracehttp.GetHTTPStatusCode(withField); got != http.StatusTeapot {
+		t.Errorf("WithField dropped the status override: got %d, want %d", got, http.StatusTeapot)
+	}
+	if fields := trace.GetFields(withField); fields["req_id"] != "r1" {
+		t.Errorf("field not attached: %v", fields)
+	}
+
+	withFields := trace.WithFields(wrapped, map[string]any{"a": 1, "b": 2})
+	if got := tracehttp.GetHTTPStatusCode(withFields); got != http.StatusTeapot {
+		t.Errorf("WithFields dropped the status override: got %d, want %d", got, http.StatusTeapot)
+	}
+
+	// The original must stay untouched (immutability contract).
+	if fields := trace.GetFields(wrapped); fields["req_id"] != nil {
+		t.Errorf("original error mutated: %v", fields)
 	}
 }

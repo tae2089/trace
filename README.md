@@ -1,7 +1,7 @@
 # Trace - Modern Go Error Handling
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/tae2089/trace.svg)](https://pkg.go.dev/github.com/tae2089/trace)
-[![Go Report Card](https://goreportcard.com/badge/github.com/tae2089/trace)](https://goreportcard.com/report/github.com/tae2089/trace)
+[![Go Reference](https://pkg.go.dev/badge/github.com/tae2089/trace/v2.svg)](https://pkg.go.dev/github.com/tae2089/trace/v2)
+[![Go Report Card](https://goreportcard.com/badge/github.com/tae2089/trace/v2)](https://goreportcard.com/report/github.com/tae2089/trace/v2)
 
 A modern error handling package for Go, inspired by [gravitational/trace](https://github.com/gravitational/trace) but upgraded for Go 1.25+ with:
 
@@ -13,12 +13,31 @@ A modern error handling package for Go, inspired by [gravitational/trace](https:
 - 🌐 **HTTP utilities** - Middleware, error responses, status code mapping
 - 📦 **Context integration** - Trace IDs, fields, cancel cause, detached contexts
 - 🔄 **Error chain iterator** - `for e := range trace.Errors(err)` (Go 1.23+)
+- 🧰 **System error conversion** - `os`, `io/fs`, and `syscall` failures become typed errors
 
 ## Installation
 
 ```bash
-go get github.com/tae2089/trace
+go get github.com/tae2089/trace/v2
 ```
+
+## Packages
+
+| Package | Import path | Contents |
+| --- | --- | --- |
+| `trace` | `github.com/tae2089/trace/v2` | Error values, stack frames, typed categories, context helpers, slog integration, `Result`/`Pipeline` |
+| `tracehttp` | `github.com/tae2089/trace/v2/tracehttp` | Everything that touches `net/http`: status mapping, JSON error responses, middleware, client |
+
+The split exists so that programs which only need error values never pay for
+`net/http`. Measured on Go 1.25:
+
+| Dependency graph | stdlib packages |
+| --- | ---: |
+| `trace` | 72 |
+| `trace` + `tracehttp` | 185 |
+
+Importing `net/http` also drags in the whole `crypto/tls` and `crypto/x509`
+tree. CI fails the build if `net/http` reappears in the root package's graph.
 
 ## Quick Start
 
@@ -28,7 +47,7 @@ package main
 import (
     "fmt"
 
-    "github.com/tae2089/trace"
+    "github.com/tae2089/trace/v2"
 )
 
 func main() {
@@ -115,7 +134,7 @@ if trace.IsAccessDenied(err) { /* handle 403 */ }
 if trace.IsRetryable(err) { /* retry the operation */ }
 
 // Get HTTP status code
-statusCode := trace.GetHTTPStatusCode(err) // e.g., 404, 403, 500
+statusCode := tracehttp.GetHTTPStatusCode(err) // e.g., 404, 403, 500
 ```
 
 ### Structured Fields
@@ -176,10 +195,10 @@ discardHandler := trace.NewErrorHandler(nil)
 
 ```go
 // The application owns request logging; trace only classifies and renders.
-func Handle(fn trace.ErrorHandlerFunc) http.HandlerFunc {
+func Handle(fn tracehttp.ErrorHandlerFunc) http.HandlerFunc {
     return func(w http.ResponseWriter, r *http.Request) {
         if err := fn(w, r); err != nil {
-            httpErr := trace.ToHTTPError(err)
+            httpErr := tracehttp.ToHTTPError(err)
             logger.Error("request failed",
                 trace.SlogError(err),
                 slog.Int("status_code", httpErr.Status),
@@ -188,7 +207,7 @@ func Handle(fn trace.ErrorHandlerFunc) http.HandlerFunc {
             )
 
             requestID := r.Header.Get("X-Request-ID")
-            if writeErr := trace.WriteError(w, err, requestID); writeErr != nil {
+            if writeErr := tracehttp.WriteError(w, err, requestID); writeErr != nil {
                 logger.Error("failed to write error response", "error", writeErr)
             }
         }
@@ -214,7 +233,7 @@ Framework adapters such as Gin can use `ErrorResponseFor` without writing throug
 `net/http`:
 
 ```go
-status, response := trace.ErrorResponseFor(err, requestID)
+status, response := tracehttp.ErrorResponseFor(err, requestID)
 ```
 
 `request_id` is supplied explicitly and is separate from internal `trace_id`
@@ -222,9 +241,44 @@ fields. Error fields, details, causes, stack frames, and outer `trace.Wrap`
 messages are never copied into the response. All 5xx messages are normalized to
 `internal server error`.
 
-`WriteErrorWithLogger`, `ErrorMiddlewareWithLogger`, and
-`RecoverMiddleware(next, logger)` are deprecated. Applications should decide
-logging level, duration, route, and response-size policy.
+`WriteErrorWithLogger`, `ErrorMiddlewareWithLogger`, and `RecoverMiddleware`
+were removed in v2. Applications should decide logging level, duration, route,
+response-size, and panic-recovery policy themselves.
+
+### Which error decides the response
+
+`ToHTTPError` walks the chain from the outside in and stops at the first link
+it can classify, so an outer wrap always beats an inner one:
+
+```go
+err := trace.NotFound("secret project not found")
+err = trace.WrapAccessDenied(err, "not a member")
+
+tracehttp.ToHTTPError(err) // 403 access_denied — not 404
+```
+
+That ordering matters for more than tidiness. If the inner `NotFound` won, the
+response would tell an unauthorized caller that the resource exists.
+
+An application type that implements `HTTPErrorProvider` joins the same walk and
+wins at whatever depth it sits:
+
+```go
+type QuotaError struct{ Plan string }
+
+func (e *QuotaError) Error() string { return "plan quota reached" }
+
+func (e *QuotaError) HTTPError() tracehttp.HTTPError {
+    return tracehttp.HTTPError{
+        Status:  http.StatusPaymentRequired,
+        Code:    "quota_reached",
+        Message: "upgrade required",
+    }
+}
+```
+
+Statuses outside 400–599, or a blank `Code`, are rejected and become a generic
+internal error, and every 5xx message is replaced with `internal server error`.
 
 Clients using this response contract can safely restore built-in typed errors:
 
@@ -239,7 +293,7 @@ body, err := io.ReadAll(resp.Body)
 if err != nil {
     return err
 }
-if err := trace.ReadErrorResponse(resp.StatusCode, body); err != nil {
+if err := tracehttp.ReadErrorResponse(resp.StatusCode, body); err != nil {
     if trace.IsNotFound(err) {
         // error.code was "not_found"
     }
@@ -393,7 +447,7 @@ combined := trace.Aggregate(errs...)
 if trace.IsNotFound(combined) { /* at least one is NotFound */ }
 
 // Get most severe HTTP status
-statusCode := trace.GetHTTPStatusCode(combined)
+statusCode := tracehttp.GetHTTPStatusCode(combined)
 ```
 
 ### Error Chain Iterator (Go 1.23+)
@@ -414,6 +468,43 @@ for e := range trace.Errors(agg) {
     }
 }
 ```
+
+### System Error Conversion
+
+`ConvertSystemError` turns `os`, `io/fs`, and `syscall` failures into typed
+trace errors so the rest of your code can use `trace.IsNotFound` and friends
+instead of matching sentinel values by hand.
+
+```go
+f, err := os.Open(path)
+if err != nil {
+    return trace.ConvertSystemError(err) // fs.ErrNotExist becomes a NotFoundError
+}
+```
+
+| Source error | Result |
+| --- | --- |
+| `fs.ErrNotExist` | `NotFoundError` |
+| `fs.ErrExist` | `AlreadyExistsError` |
+| `fs.ErrPermission` | `AccessDeniedError` |
+| `context.Canceled` | `CanceledError` |
+| `context.DeadlineExceeded`, `os.ErrDeadlineExceeded`, `Timeout() bool` reporting true | `TimeoutError` |
+| `ECONNREFUSED`, `ECONNRESET`, `ECONNABORTED`, `EHOSTUNREACH`, `ENETUNREACH`, `ENETDOWN`, `EPIPE` | `ConnectionProblemError` |
+| `ETIMEDOUT` | `TimeoutError` |
+| `EMFILE`, `ENFILE` | `LimitExceededError` |
+| `Temporary() bool` reporting true | `ConnectionProblemError` |
+
+Rules:
+
+- `nil` returns `nil`, and an error that already carries a trace category is
+  returned unchanged — an outer `WrapAccessDenied` is never downgraded by an
+  inner `fs.ErrNotExist`.
+- Anything unrecognized is returned as-is, not forced into a category.
+- The conversion attaches **no message**. Operating system text often contains a
+  file path, so it stays in the cause, where `%+v` and logs can see it, and out
+  of `tracehttp`'s client response.
+- Errno matching is compiled only on `unix` and `windows`; other platforms fall
+  back to the portable rules above and still build.
 
 ### Debug Output
 
@@ -441,6 +532,33 @@ fmt.Println(trace.DebugReport(err))
 // User-friendly message (without stack traces)
 msg := trace.UserMessage(err) // "failed to fetch user"
 ```
+
+## Performance
+
+Construction is the hot path — errors are created far more often than they are
+printed — so v2 moves cost from creation to rendering:
+
+- A `Frame` records only the program counter. The function name, file, and line
+  resolve when the error is rendered (`Error()`, `%+v`, slog, JSON).
+- The structured fields map is allocated only when a field is attached.
+- Hot paths walk the error chain with plain type assertions instead of
+  `errors.As`, with the same semantics (including the `As(any) bool` hook and
+  aggregate branches).
+
+Measured on Apple M1 Pro, Go 1.25 (`go test -bench . -benchmem`):
+
+| Benchmark | v1 layout | v2 |
+| --- | --- | --- |
+| `Wrap` (1 level) | 435 ns, 416 B, 6 allocs | 162 ns, 72 B, 2 allocs |
+| `NotFound` | 389 ns, 416 B, 6 allocs | 165 ns, 80 B, 3 allocs |
+| `Wrap` ×10 deep | 4.9 µs, 6.4 KB, 69 allocs | 1.9 µs, 1.2 KB, 29 allocs |
+| `CaptureFrame` | 285 ns, 248 B, 2 allocs | 95 ns, 0 B, 0 allocs |
+| `IsNotFound` (10 deep) | 638 ns | 102 ns |
+| `err.Error()` (5 deep) | 1.3 µs | 4.4 µs |
+
+The last row is the deliberate trade: rendering pays for the deferred symbol
+resolution. `fmt.Errorf("%w")` is still ~2× faster than `Wrap` — that is the
+price of carrying a stack trace at all.
 
 ## Best Practices
 
@@ -546,7 +664,50 @@ replacement. Important differences:
 | `WriteError` serializes trace internals | `WriteError` emits only the public `ErrorResponse` envelope |
 | `ReadError` deserializes remote trace internals | `ReadErrorResponse` creates a new local typed error from the public code |
 | Status-driven HTTP reconstruction | Code + status validation distinguishes categories sharing a status |
+| Concrete type assertions | Behavior interfaces (`ErrorNotFound`, `HTTPErrorProvider`) that your own types can implement |
+| `gravitational_trace.nocrypto` build tag drops `net/http` | Separate `tracehttp` package; the root package never imports `net/http` |
+| `ConvertSystemError` | `ConvertSystemError` |
+| `CompareFailed`, `OAuth2`, `Trust`, `Retry` | No equivalent |
 | No equivalent | `slog`, generics, pipelines, and context integration |
+
+## Migration from v1
+
+v2 moves every `net/http`-dependent symbol into `tracehttp` and removes the
+deprecated logger-coupled helpers. There are no compatibility shims in the root
+package, because re-exporting the HTTP helpers would pull `net/http` back in
+and undo the reason for the split.
+
+```go
+import (
+    "github.com/tae2089/trace/v2"
+    "github.com/tae2089/trace/v2/tracehttp"
+)
+```
+
+| v1 | v2 |
+| --- | --- |
+| `trace.ToHTTPError` | `tracehttp.ToHTTPError` |
+| `trace.ErrorResponseFor` | `tracehttp.ErrorResponseFor` |
+| `trace.WriteError` | `tracehttp.WriteError` |
+| `trace.ErrorMiddleware` | `tracehttp.ErrorMiddleware` |
+| `trace.ReadErrorResponse` | `tracehttp.ReadErrorResponse` |
+| `trace.FromHTTPResponse` | `tracehttp.FromHTTPResponse` |
+| `trace.GetHTTPStatusCode` | `tracehttp.GetHTTPStatusCode` |
+| `trace.IsHTTPError`, `trace.WrapHTTPError` | `tracehttp.IsHTTPError`, `tracehttp.WrapHTTPError` |
+| `trace.NewClient` | `tracehttp.NewClient` |
+| `trace.HTTPError`, `trace.ErrorCode`, `trace.Code*` | `tracehttp.HTTPError`, `tracehttp.ErrorCode`, `tracehttp.Code*` |
+| `trace.HTTPStatusCode` interface | Removed — implement `tracehttp.HTTPErrorProvider` instead |
+| `err.HTTPStatusCode()` / `err.HTTPError()` methods | Removed — call `tracehttp.ToHTTPError(err)` |
+| `trace.WriteErrorWithLogger` | Removed |
+| `trace.ErrorMiddlewareWithLogger` | Removed |
+| `trace.RecoverMiddleware` | Removed |
+
+`trace.WithField` and `trace.WithFields` rebuild an error chain when they
+replace the inner `*TraceError`. Built-in wrapper types and
+`tracehttp.WrapHTTPError`'s status override survive this. A third-party wrapper
+type is dropped unless it implements `trace.TraceErrorReplacer` — one method,
+`ReplaceTraceError(original, replacement *TraceError) (error, bool)`, that
+rebuilds the wrapper around the replacement.
 
 ## Requirements
 
@@ -561,7 +722,30 @@ replacement. Important differences:
 
 ## Changelog
 
-### Unreleased
+### v2.0.0
+
+- **Breaking**: Module path is now `github.com/tae2089/trace/v2`
+- **Breaking**: Every `net/http`-dependent symbol moved to the `tracehttp` package
+- **Breaking**: `HTTPStatusCode()` and `HTTPError()` methods removed from the typed errors;
+  `tracehttp` classifies through the behavior interfaces instead
+- **Breaking**: `HTTPStatusCode` interface removed; `HTTPErrorProvider` is the single extension point
+- **Breaking**: `WriteErrorWithLogger`, `ErrorMiddlewareWithLogger`, and `RecoverMiddleware` removed
+- **Added**: `ConvertSystemError(err)` for `os`, `io/fs`, and `syscall` failures
+- **Added**: `Canceled(err, msg)` and `WrapLimitExceeded(err, msg)` constructors
+- **Added**: `CaptureFrame(skip)` is now exported so other packages can build trace errors
+- **Added**: `TraceErrorReplacer` hook so wrapper types outside the package survive
+  `WithField`/`WithFields`; `tracehttp.WrapHTTPError`'s status override now survives them
+  (it was silently dropped in v1)
+- **Breaking**: `Frame` stores only a program counter; `Function`, `File`, and `Line` are
+  methods now, and symbol resolution happens at render time. `MarshalJSON` keeps the
+  `{"function","file","line"}` wire shape
+- **Performance**: `Wrap` 435→162 ns and 6→2 allocs; a 10-deep wrap chain 4.9µs→1.9µs;
+  `IsNotFound` on a 10-deep chain 638→102 ns; the structured fields map is allocated
+  lazily and `errors.As` was replaced with a reflection-free chain walk on hot paths
+- **Added**: Apache-2.0 `LICENSE` and a CI workflow that rejects `net/http` in the root package
+- **Changed**: `ToHTTPError` documents and tests outermost-wins classification ordering
+
+### v1.2.0
 
 - **Added**: Safe `HTTPError`, `ErrorResponseFor`, and `WriteError` response contract
 - **Added**: `ReadErrorResponse(statusCode, body)` for safe code-based typed error restoration
@@ -587,4 +771,4 @@ replacement. Important differences:
 
 ## License
 
-Apache 2.0
+Apache-2.0. See [LICENSE](LICENSE).

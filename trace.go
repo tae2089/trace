@@ -4,6 +4,7 @@
 package trace
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,18 +17,70 @@ import (
 )
 
 // @intent describe one recorded call site so errors and logs can point back to their origin.
-// Frame represents a single stack frame
+// @domainRule only the program counter is stored; symbol resolution is deferred to render
+// time because errors are created far more often than they are printed.
+// Frame represents a single stack frame. It records the call site as a
+// program counter and resolves the function name, file, and line lazily.
 type Frame struct {
-	Function string `json:"function"`
-	File     string `json:"file"`
-	Line     int    `json:"line"`
+	pc uintptr
+}
+
+// @intent resolve the stored program counter into human-readable call-site data.
+// @ensures returns zero values for a zero frame and an "unknown" function name
+// when symbol information is unavailable.
+func (f Frame) resolve() (function, file string, line int) {
+	if f.pc == 0 {
+		return "", "", 0
+	}
+	frame, _ := runtime.CallersFrames([]uintptr{f.pc}).Next()
+	function = frame.Function
+	if function == "" {
+		function = "unknown"
+	} else {
+		function = filepath.Base(function)
+	}
+	if frame.File != "" {
+		file = filepath.Base(frame.File)
+	}
+	return function, file, frame.Line
+}
+
+// @intent expose the resolved function name for the recorded call site.
+func (f Frame) Function() string {
+	function, _, _ := f.resolve()
+	return function
+}
+
+// @intent expose the resolved file base name for the recorded call site.
+func (f Frame) File() string {
+	_, file, _ := f.resolve()
+	return file
+}
+
+// @intent expose the resolved line number for the recorded call site.
+func (f Frame) Line() int {
+	_, _, line := f.resolve()
+	return line
 }
 
 // @intent render a single frame in a compact file-line-function format for debugging output.
 // @ensures returns a string containing the file name, line number, and function name.
 // String returns a human-readable representation of the frame
 func (f Frame) String() string {
-	return fmt.Sprintf("%s:%d %s", f.File, f.Line, f.Function)
+	function, file, line := f.resolve()
+	return fmt.Sprintf("%s:%d %s", file, line, function)
+}
+
+// @intent keep the frame's JSON wire shape stable while the in-memory layout stays a bare program counter.
+// @ensures emits the {"function":...,"file":...,"line":...} object shape used by earlier versions.
+// MarshalJSON implements json.Marshaler.
+func (f Frame) MarshalJSON() ([]byte, error) {
+	function, file, line := f.resolve()
+	return json.Marshal(struct {
+		Function string `json:"function"`
+		File     string `json:"file"`
+		Line     int    `json:"line"`
+	}{Function: function, File: file, Line: line})
 }
 
 // @intent represent an ordered stack trace that can be rendered or serialized with an error.
@@ -47,9 +100,10 @@ func (fs Frames) String() string {
 		if i > 0 {
 			b.WriteString(" <- ")
 		}
-		b.WriteString(f.File)
+		_, file, line := f.resolve()
+		b.WriteString(file)
 		b.WriteString(":")
-		b.WriteString(strconv.Itoa(f.Line))
+		b.WriteString(strconv.Itoa(line))
 	}
 	b.WriteString("]")
 	return b.String()
@@ -158,35 +212,33 @@ func (e *TraceError) LogValue() slog.Value {
 func framesToSerializable(frames Frames) []map[string]any {
 	result := make([]map[string]any, len(frames))
 	for i, f := range frames {
+		function, file, line := f.resolve()
 		result[i] = map[string]any{
-			"file": f.File,
-			"line": f.Line,
-			"func": f.Function,
+			"file": file,
+			"line": line,
+			"func": function,
 		}
 	}
 	return result
 }
 
 // @intent capture the caller information that anchors trace output to a concrete source location.
+// @intent let packages outside this module mint errors whose first frame points at their own caller.
 // @ensures returns an empty frame when runtime caller information is unavailable.
-// captureFrame captures a single stack frame at the given skip level
-func captureFrame(skip int) Frame {
-	pc, file, line, ok := runtime.Caller(skip)
-	if !ok {
+// CaptureFrame captures a single stack frame at the given skip level.
+//
+// skip follows runtime.Caller: 0 is CaptureFrame itself, 1 is its immediate
+// caller, and 2 is the caller of that function. Constructors that want the
+// frame to point at their own caller pass 2.
+func CaptureFrame(skip int) Frame {
+	var pcs [1]uintptr
+	// runtime.Callers skip is offset by one from runtime.Caller: 0 identifies
+	// runtime.Callers itself, so skip+1 keeps this function's documented
+	// runtime.Caller-style contract.
+	if runtime.Callers(skip+1, pcs[:]) == 0 {
 		return Frame{}
 	}
-
-	fn := runtime.FuncForPC(pc)
-	funcName := "unknown"
-	if fn != nil {
-		funcName = filepath.Base(fn.Name())
-	}
-
-	return Frame{
-		Function: funcName,
-		File:     filepath.Base(file),
-		Line:     line,
-	}
+	return Frame{pc: pcs[0]}
 }
 
 // @intent preserve the original error while adding call-site debugging context.
@@ -202,15 +254,14 @@ func Wrap(err error, msg ...string) error {
 		return nil
 	}
 
-	frame := captureFrame(2)
+	frame := CaptureFrame(2)
 	var message string
 	if len(msg) > 0 {
 		message = msg[0]
 	}
 
 	var existingFrames Frames
-	var te *TraceError
-	if errors.As(err, &te) {
+	if te := findTraceError(err); te != nil {
 		existingFrames = te.Frames
 	}
 
@@ -218,7 +269,6 @@ func Wrap(err error, msg ...string) error {
 		Err:     err,
 		Message: message,
 		Frames:  append(Frames{frame}, existingFrames...),
-		Fields:  make(map[string]any),
 	}
 }
 
@@ -230,15 +280,14 @@ func Wrapf(err error, format string, args ...any) error {
 	if err == nil {
 		return nil
 	}
-	return wrapInternal(err, fmt.Sprintf(format, args...), captureFrame(2))
+	return wrapInternal(err, fmt.Sprintf(format, args...), CaptureFrame(2))
 }
 
 // @intent share the common TraceError wrapping path used by formatted and typed error helpers.
 // @ensures prepends the supplied frame to any existing trace frames.
 func wrapInternal(err error, msg string, frame Frame) error {
 	var existingFrames Frames
-	var te *TraceError
-	if errors.As(err, &te) {
+	if te := findTraceError(err); te != nil {
 		existingFrames = te.Frames
 	}
 
@@ -246,7 +295,6 @@ func wrapInternal(err error, msg string, frame Frame) error {
 		Err:     err,
 		Message: msg,
 		Frames:  append(Frames{frame}, existingFrames...),
-		Fields:  make(map[string]any),
 	}
 }
 
@@ -261,38 +309,96 @@ func WrapWithFields(err error, fields map[string]any, msg ...string) error {
 	}
 
 	wrapped := Wrap(err, msg...)
-	if te, ok := wrapped.(*TraceError); ok {
-		for k, v := range fields {
-			te.Fields[k] = v
-		}
+	if te, ok := wrapped.(*TraceError); ok && len(fields) > 0 {
+		te.Fields = copyFields(fields)
 	}
 	return wrapped
 }
 
 // @intent create a fresh traceable application error at the current call site.
 // @ensures records the current call site as the first trace frame.
-// @ensures returns a TraceError with initialized fields storage.
+// @ensures allocates structured fields storage lazily on first field attachment.
 // New creates a new error with stack trace
 func New(msg string) error {
-	frame := captureFrame(2)
+	frame := CaptureFrame(2)
 	return &TraceError{
 		Message: msg,
 		Frames:  Frames{frame},
-		Fields:  make(map[string]any),
 	}
 }
 
 // @intent create a traceable error from formatted application context.
 // @ensures records the current call site as the first trace frame.
-// @ensures returns a TraceError with initialized fields storage.
+// @ensures allocates structured fields storage lazily on first field attachment.
 // Errorf creates a new error with formatted message and stack trace
 func Errorf(format string, args ...any) error {
-	frame := captureFrame(2)
+	frame := CaptureFrame(2)
 	return &TraceError{
 		Message: fmt.Sprintf(format, args...),
 		Frames:  Frames{frame},
-		Fields:  make(map[string]any),
 	}
+}
+
+// @intent walk an error tree with plain type assertions so hot paths avoid the reflection cost of errors.As.
+// @domainRule matches errors.As semantics: direct match first, then a custom As(any) bool hook,
+// then single-cause and aggregate traversal in order.
+// @ensures returns false without touching target when no match exists in the tree.
+func chainAs[T any](err error, target *T) bool {
+	for err != nil {
+		if v, ok := err.(T); ok {
+			*target = v
+			return true
+		}
+		if x, ok := err.(interface{ As(any) bool }); ok && x.As(target) {
+			return true
+		}
+		switch u := err.(type) {
+		case interface{ Unwrap() error }:
+			err = u.Unwrap()
+		case interface{ Unwrap() []error }:
+			for _, child := range u.Unwrap() {
+				if chainAs(child, target) {
+					return true
+				}
+			}
+			return false
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+// @intent locate the nearest TraceError without the reflection cost of errors.As.
+// @domainRule kept non-generic: the generic chainAs pays a dictionary-based type-assertion
+// cost per link that this monomorphic loop avoids on the construction hot path.
+// @ensures returns nil when the chain carries no TraceError.
+func findTraceError(err error) *TraceError {
+	for err != nil {
+		if te, ok := err.(*TraceError); ok {
+			return te
+		}
+		if x, ok := err.(interface{ As(any) bool }); ok {
+			var te *TraceError
+			if x.As(&te) {
+				return te
+			}
+		}
+		switch u := err.(type) {
+		case interface{ Unwrap() error }:
+			err = u.Unwrap()
+		case interface{ Unwrap() []error }:
+			for _, child := range u.Unwrap() {
+				if te := findTraceError(child); te != nil {
+					return te
+				}
+			}
+			return nil
+		default:
+			return nil
+		}
+	}
+	return nil
 }
 
 // @intent normalize mixed message-and-arguments inputs into one human-readable error message.
@@ -322,8 +428,7 @@ func formatMessage(msgAndArgs ...any) string {
 // GetFrames extracts frames from an error if available.
 // Returns a copy of the frames to prevent external mutation.
 func GetFrames(err error) Frames {
-	var te *TraceError
-	if errors.As(err, &te) {
+	if te := findTraceError(err); te != nil {
 		cp := make(Frames, len(te.Frames))
 		copy(cp, te.Frames)
 		return cp
@@ -336,8 +441,7 @@ func GetFrames(err error) Frames {
 // GetFields extracts fields from an error if available.
 // Returns a copy of the fields to prevent external mutation.
 func GetFields(err error) map[string]any {
-	var te *TraceError
-	if errors.As(err, &te) {
+	if te := findTraceError(err); te != nil {
 		return copyFields(te.Fields)
 	}
 	return nil
@@ -354,8 +458,7 @@ func WithField(err error, key string, value any) error {
 		return nil
 	}
 
-	var te *TraceError
-	if errors.As(err, &te) {
+	if te := findTraceError(err); te != nil {
 		newFields := copyFields(te.Fields)
 		newFields[key] = value
 		clone := cloneTraceError(te)
@@ -365,7 +468,7 @@ func WithField(err error, key string, value any) error {
 
 	wrapped := Wrap(err)
 	if wte, ok := wrapped.(*TraceError); ok {
-		wte.Fields[key] = value
+		wte.Fields = map[string]any{key: value}
 	}
 	return wrapped
 }
@@ -379,8 +482,7 @@ func WithFields(err error, fields map[string]any) error {
 		return nil
 	}
 
-	var te *TraceError
-	if errors.As(err, &te) {
+	if te := findTraceError(err); te != nil {
 		newFields := copyFields(te.Fields)
 		for k, v := range fields {
 			newFields[k] = v
@@ -391,10 +493,8 @@ func WithFields(err error, fields map[string]any) error {
 	}
 
 	wrapped := Wrap(err)
-	if wte, ok := wrapped.(*TraceError); ok {
-		for k, v := range fields {
-			wte.Fields[k] = v
-		}
+	if wte, ok := wrapped.(*TraceError); ok && len(fields) > 0 {
+		wte.Fields = copyFields(fields)
 	}
 	return wrapped
 }
@@ -410,11 +510,29 @@ func cloneTraceError(te *TraceError) *TraceError {
 	}
 }
 
+// @intent let custom wrapper types survive field updates instead of being peeled away.
+// @domainRule the wrapper must return ok=false when original is not its direct inner TraceError.
+// TraceErrorReplacer lets wrapper types outside this package survive WithField
+// and WithFields. When those functions rebuild an error chain they replace the
+// inner *TraceError; wrappers this package does not know are otherwise dropped.
+// A wrapper that implements this method is asked to rebuild itself around
+// replacement and report ok=true, or ok=false if original is not its inner
+// TraceError.
+type TraceErrorReplacer interface {
+	ReplaceTraceError(original, replacement *TraceError) (rebuilt error, ok bool)
+}
+
 // @intent swap the inner TraceError while preserving known wrapper types around it.
 // @domainRule built-in typed wrappers are recreated so errors.Is and errors.As continue to work.
 func replaceTraceError(err error, original *TraceError, replacement *TraceError) error {
 	if err == original {
 		return replacement
+	}
+
+	if r, ok := err.(TraceErrorReplacer); ok {
+		if rebuilt, replaced := r.ReplaceTraceError(original, replacement); replaced {
+			return rebuilt
+		}
 	}
 
 	switch e := err.(type) {
@@ -461,10 +579,6 @@ func replaceTraceError(err error, original *TraceError, replacement *TraceError)
 	case *CanceledError:
 		if e.TraceError == original {
 			return &CanceledError{TraceError: replacement}
-		}
-	case *httpStatusError:
-		if e.TraceError == original {
-			return &httpStatusError{TraceError: replacement, statusCode: e.statusCode}
 		}
 	}
 
@@ -547,8 +661,7 @@ func UserMessage(err error) string {
 		return ""
 	}
 
-	var te *TraceError
-	if errors.As(err, &te) {
+	if te := findTraceError(err); te != nil {
 		if te.Message != "" {
 			return te.Message
 		}

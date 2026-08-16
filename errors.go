@@ -1,11 +1,9 @@
-// @index Typed error categories, retryability rules, and HTTP status mapping for trace errors.
+// @index Typed error categories and retryability rules for trace errors.
 package trace
 
 import (
-	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"strings"
 )
 
@@ -86,12 +84,6 @@ type ErrorRetryable interface {
 	IsRetryable() bool
 }
 
-// @intent let error types declare the HTTP status code they should map to at service boundaries.
-// HTTPStatusCode is an interface for errors that can provide HTTP status codes
-type HTTPStatusCode interface {
-	HTTPStatusCode() int
-}
-
 // @intent mark failures caused by missing resources so callers can branch on lookup semantics.
 // NotFoundError represents a "not found" error
 type NotFoundError struct {
@@ -100,18 +92,6 @@ type NotFoundError struct {
 
 // @intent advertise missing-resource semantics for behavior-based error checks.
 func (e *NotFoundError) IsNotFound() bool { return true }
-
-// @intent map not-found errors to HTTP 404 responses.
-func (e *NotFoundError) HTTPStatusCode() int { return http.StatusNotFound }
-
-// @intent expose the typed public message without using outer trace wrapper context.
-func (e *NotFoundError) HTTPError() HTTPError {
-	return HTTPError{
-		Status:  http.StatusNotFound,
-		Code:    CodeNotFound,
-		Message: e.TraceError.Message,
-	}
-}
 
 // @intent delegate user-facing string rendering to the embedded TraceError.
 func (e *NotFoundError) Error() string { return e.TraceError.Error() }
@@ -131,14 +111,6 @@ type AlreadyExistsError struct {
 // @intent advertise duplicate-resource semantics for behavior-based error checks.
 func (e *AlreadyExistsError) IsAlreadyExists() bool { return true }
 
-// @intent map duplicate-resource errors to HTTP 409 responses.
-func (e *AlreadyExistsError) HTTPStatusCode() int { return http.StatusConflict }
-
-// @intent expose the typed public message and a stable duplicate-resource code.
-func (e *AlreadyExistsError) HTTPError() HTTPError {
-	return HTTPError{Status: http.StatusConflict, Code: CodeAlreadyExists, Message: e.TraceError.Message}
-}
-
 // @intent delegate user-facing string rendering to the embedded TraceError.
 func (e *AlreadyExistsError) Error() string { return e.TraceError.Error() }
 
@@ -153,14 +125,6 @@ type BadParameterError struct {
 
 // @intent advertise invalid-input semantics for behavior-based error checks.
 func (e *BadParameterError) IsBadParameter() bool { return true }
-
-// @intent map invalid-input errors to HTTP 400 responses.
-func (e *BadParameterError) HTTPStatusCode() int { return http.StatusBadRequest }
-
-// @intent expose the typed public message and a stable invalid-input code.
-func (e *BadParameterError) HTTPError() HTTPError {
-	return HTTPError{Status: http.StatusBadRequest, Code: CodeBadRequest, Message: e.TraceError.Message}
-}
 
 // @intent delegate user-facing string rendering to the embedded TraceError.
 func (e *BadParameterError) Error() string { return e.TraceError.Error() }
@@ -177,14 +141,6 @@ type NotImplementedError struct {
 // @intent advertise unsupported-operation semantics for behavior-based error checks.
 func (e *NotImplementedError) IsNotImplemented() bool { return true }
 
-// @intent map unsupported-operation errors to HTTP 501 responses.
-func (e *NotImplementedError) HTTPStatusCode() int { return http.StatusNotImplemented }
-
-// @intent classify unsupported functionality while leaving 5xx message sanitization to ToHTTPError.
-func (e *NotImplementedError) HTTPError() HTTPError {
-	return HTTPError{Status: http.StatusNotImplemented, Code: CodeNotImplemented, Message: e.TraceError.Message}
-}
-
 // @intent delegate user-facing string rendering to the embedded TraceError.
 func (e *NotImplementedError) Error() string { return e.TraceError.Error() }
 
@@ -199,18 +155,6 @@ type UnauthenticatedError struct {
 
 // @intent advertise authentication-failure semantics for behavior-based checks.
 func (e *UnauthenticatedError) IsUnauthenticated() bool { return true }
-
-// @intent map authentication failures to HTTP 401 responses.
-func (e *UnauthenticatedError) HTTPStatusCode() int { return http.StatusUnauthorized }
-
-// @intent expose only a fixed authentication message to clients.
-func (e *UnauthenticatedError) HTTPError() HTTPError {
-	return HTTPError{
-		Status:  http.StatusUnauthorized,
-		Code:    CodeUnauthenticated,
-		Message: "authentication required",
-	}
-}
 
 // @intent delegate developer-facing rendering to the embedded TraceError.
 func (e *UnauthenticatedError) Error() string { return e.TraceError.Error() }
@@ -227,14 +171,6 @@ type AccessDeniedError struct {
 // @intent advertise authorization-failure semantics for behavior-based error checks.
 func (e *AccessDeniedError) IsAccessDenied() bool { return true }
 
-// @intent map access-denied errors to HTTP 403 responses.
-func (e *AccessDeniedError) HTTPStatusCode() int { return http.StatusForbidden }
-
-// @intent expose only a fixed authorization message to clients.
-func (e *AccessDeniedError) HTTPError() HTTPError {
-	return HTTPError{Status: http.StatusForbidden, Code: CodeAccessDenied, Message: "access denied"}
-}
-
 // @intent delegate user-facing string rendering to the embedded TraceError.
 func (e *AccessDeniedError) Error() string { return e.TraceError.Error() }
 
@@ -249,14 +185,6 @@ type ConflictError struct {
 
 // @intent advertise state-conflict semantics for behavior-based error checks.
 func (e *ConflictError) IsConflict() bool { return true }
-
-// @intent map conflict errors to HTTP 409 responses.
-func (e *ConflictError) HTTPStatusCode() int { return http.StatusConflict }
-
-// @intent expose the typed public message and a stable state-conflict code.
-func (e *ConflictError) HTTPError() HTTPError {
-	return HTTPError{Status: http.StatusConflict, Code: CodeConflict, Message: e.TraceError.Message}
-}
 
 // @intent delegate user-facing string rendering to the embedded TraceError.
 func (e *ConflictError) Error() string { return e.TraceError.Error() }
@@ -276,14 +204,6 @@ func (e *ConnectionProblemError) IsConnectionProblem() bool { return true }
 // @intent advertise retry-safe semantics for transient connection failures.
 func (e *ConnectionProblemError) IsRetryable() bool { return true }
 
-// @intent map connection problems to HTTP 503 responses.
-func (e *ConnectionProblemError) HTTPStatusCode() int { return http.StatusServiceUnavailable }
-
-// @intent classify transient unavailability while leaving 5xx message sanitization to ToHTTPError.
-func (e *ConnectionProblemError) HTTPError() HTTPError {
-	return HTTPError{Status: http.StatusServiceUnavailable, Code: CodeUnavailable, Message: e.TraceError.Message}
-}
-
 // @intent delegate user-facing string rendering to the embedded TraceError.
 func (e *ConnectionProblemError) Error() string { return e.TraceError.Error() }
 
@@ -301,14 +221,6 @@ func (e *LimitExceededError) IsLimitExceeded() bool { return true }
 
 // @intent advertise retry-safe semantics for throttled operations.
 func (e *LimitExceededError) IsRetryable() bool { return true }
-
-// @intent map throttling and quota failures to HTTP 429 responses.
-func (e *LimitExceededError) HTTPStatusCode() int { return http.StatusTooManyRequests }
-
-// @intent expose the typed public message and a stable throttling code.
-func (e *LimitExceededError) HTTPError() HTTPError {
-	return HTTPError{Status: http.StatusTooManyRequests, Code: CodeLimitExceeded, Message: e.TraceError.Message}
-}
 
 // @intent delegate user-facing string rendering to the embedded TraceError.
 func (e *LimitExceededError) Error() string { return e.TraceError.Error() }
@@ -328,14 +240,6 @@ func (e *TimeoutError) IsTimeout() bool { return true }
 // @intent advertise retry-safe semantics for timeout failures.
 func (e *TimeoutError) IsRetryable() bool { return true }
 
-// @intent map timeout failures to HTTP 504 responses.
-func (e *TimeoutError) HTTPStatusCode() int { return http.StatusGatewayTimeout }
-
-// @intent classify timeouts while leaving 5xx message sanitization to ToHTTPError.
-func (e *TimeoutError) HTTPError() HTTPError {
-	return HTTPError{Status: http.StatusGatewayTimeout, Code: CodeTimeout, Message: e.TraceError.Message}
-}
-
 // @intent delegate user-facing string rendering to the embedded TraceError.
 func (e *TimeoutError) Error() string { return e.TraceError.Error() }
 
@@ -346,12 +250,11 @@ func (e *TimeoutError) Unwrap() error { return e.TraceError }
 // @ensures returns a TraceError that prepends the supplied frame and carries forward existing fields.
 func wrapTypedInternal(err error, msg string, frame Frame) *TraceError {
 	var existingFrames Frames
-	existingFields := make(map[string]any)
-	var te *TraceError
-	if err != nil && errors.As(err, &te) {
+	var existingFields map[string]any
+	if te := findTraceError(err); te != nil {
 		existingFrames = te.Frames
-		for k, v := range te.Fields {
-			existingFields[k] = v
+		if len(te.Fields) > 0 {
+			existingFields = copyFields(te.Fields)
 		}
 	}
 	return &TraceError{
@@ -363,17 +266,15 @@ func wrapTypedInternal(err error, msg string, frame Frame) *TraceError {
 }
 
 // @intent classify a missing resource so callers can branch on lookup failure semantics.
-// @domainRule not found errors map to HTTP 404 through HTTPStatusCode.
+// @domainRule not found errors are classified as HTTP 404 by the tracehttp package.
 // @ensures records the current call site as the first trace frame.
-// @ensures returns a NotFoundError with initialized structured fields.
 // NotFound creates a new NotFoundError
 func NotFound(msgAndArgs ...any) error {
-	frame := captureFrame(2)
+	frame := CaptureFrame(2)
 	return &NotFoundError{
 		TraceError: &TraceError{
 			Message: formatMessage(msgAndArgs...),
 			Frames:  Frames{frame},
-			Fields:  make(map[string]any),
 		},
 	}
 }
@@ -386,23 +287,22 @@ func WrapNotFound(err error, msgAndArgs ...any) error {
 	if err == nil {
 		return nil
 	}
-	frame := captureFrame(2)
+	frame := CaptureFrame(2)
 	return &NotFoundError{
 		TraceError: wrapTypedInternal(err, formatMessage(msgAndArgs...), frame),
 	}
 }
 
 // @intent classify duplicate-resource failures so callers can branch on uniqueness semantics.
-// @domainRule already exists errors map to HTTP 409 through HTTPStatusCode.
+// @domainRule already exists errors are classified as HTTP 409 by the tracehttp package.
 // @ensures records the current call site as the first trace frame.
 // AlreadyExists creates a new AlreadyExistsError
 func AlreadyExists(msgAndArgs ...any) error {
-	frame := captureFrame(2)
+	frame := CaptureFrame(2)
 	return &AlreadyExistsError{
 		TraceError: &TraceError{
 			Message: formatMessage(msgAndArgs...),
 			Frames:  Frames{frame},
-			Fields:  make(map[string]any),
 		},
 	}
 }
@@ -415,23 +315,22 @@ func WrapAlreadyExists(err error, msgAndArgs ...any) error {
 	if err == nil {
 		return nil
 	}
-	frame := captureFrame(2)
+	frame := CaptureFrame(2)
 	return &AlreadyExistsError{
 		TraceError: wrapTypedInternal(err, formatMessage(msgAndArgs...), frame),
 	}
 }
 
 // @intent classify invalid input so callers can branch on client-side request errors.
-// @domainRule bad parameter errors map to HTTP 400 through HTTPStatusCode.
+// @domainRule bad parameter errors are classified as HTTP 400 by the tracehttp package.
 // @ensures records the current call site as the first trace frame.
 // BadParameter creates a new BadParameterError
 func BadParameter(msgAndArgs ...any) error {
-	frame := captureFrame(2)
+	frame := CaptureFrame(2)
 	return &BadParameterError{
 		TraceError: &TraceError{
 			Message: formatMessage(msgAndArgs...),
 			Frames:  Frames{frame},
-			Fields:  make(map[string]any),
 		},
 	}
 }
@@ -444,23 +343,22 @@ func WrapBadParameter(err error, msgAndArgs ...any) error {
 	if err == nil {
 		return nil
 	}
-	frame := captureFrame(2)
+	frame := CaptureFrame(2)
 	return &BadParameterError{
 		TraceError: wrapTypedInternal(err, formatMessage(msgAndArgs...), frame),
 	}
 }
 
 // @intent classify unsupported behavior so callers can surface capability gaps consistently.
-// @domainRule not implemented errors map to HTTP 501 through HTTPStatusCode.
+// @domainRule not implemented errors are classified as HTTP 501 by the tracehttp package.
 // @ensures records the current call site as the first trace frame.
 // NotImplemented creates a new NotImplementedError
 func NotImplemented(msgAndArgs ...any) error {
-	frame := captureFrame(2)
+	frame := CaptureFrame(2)
 	return &NotImplementedError{
 		TraceError: &TraceError{
 			Message: formatMessage(msgAndArgs...),
 			Frames:  Frames{frame},
-			Fields:  make(map[string]any),
 		},
 	}
 }
@@ -470,12 +368,11 @@ func NotImplemented(msgAndArgs ...any) error {
 // @ensures records the current call site and keeps the supplied message for diagnostics only.
 // Unauthenticated creates a new UnauthenticatedError.
 func Unauthenticated(msgAndArgs ...any) error {
-	frame := captureFrame(2)
+	frame := CaptureFrame(2)
 	return &UnauthenticatedError{
 		TraceError: &TraceError{
 			Message: formatMessage(msgAndArgs...),
 			Frames:  Frames{frame},
-			Fields:  make(map[string]any),
 		},
 	}
 }
@@ -487,24 +384,22 @@ func WrapUnauthenticated(err error, msgAndArgs ...any) error {
 	if err == nil {
 		return nil
 	}
-	frame := captureFrame(2)
+	frame := CaptureFrame(2)
 	return &UnauthenticatedError{
 		TraceError: wrapTypedInternal(err, formatMessage(msgAndArgs...), frame),
 	}
 }
 
 // @intent classify authorization failures so callers can deny access consistently.
-// @domainRule access denied errors map to HTTP 403 through HTTPStatusCode.
+// @domainRule access denied errors are classified as HTTP 403 by the tracehttp package.
 // @ensures records the current call site as the first trace frame.
-// @ensures returns an AccessDeniedError with initialized structured fields.
 // AccessDenied creates a new AccessDeniedError
 func AccessDenied(msgAndArgs ...any) error {
-	frame := captureFrame(2)
+	frame := CaptureFrame(2)
 	return &AccessDeniedError{
 		TraceError: &TraceError{
 			Message: formatMessage(msgAndArgs...),
 			Frames:  Frames{frame},
-			Fields:  make(map[string]any),
 		},
 	}
 }
@@ -517,23 +412,22 @@ func WrapAccessDenied(err error, msgAndArgs ...any) error {
 	if err == nil {
 		return nil
 	}
-	frame := captureFrame(2)
+	frame := CaptureFrame(2)
 	return &AccessDeniedError{
 		TraceError: wrapTypedInternal(err, formatMessage(msgAndArgs...), frame),
 	}
 }
 
 // @intent classify state mismatches that prevent the requested operation from succeeding.
-// @domainRule conflict errors map to HTTP 409 through HTTPStatusCode.
+// @domainRule conflict errors are classified as HTTP 409 by the tracehttp package.
 // @ensures records the current call site as the first trace frame.
 // Conflict creates a new ConflictError
 func Conflict(msgAndArgs ...any) error {
-	frame := captureFrame(2)
+	frame := CaptureFrame(2)
 	return &ConflictError{
 		TraceError: &TraceError{
 			Message: formatMessage(msgAndArgs...),
 			Frames:  Frames{frame},
-			Fields:  make(map[string]any),
 		},
 	}
 }
@@ -548,7 +442,7 @@ func ConnectionProblem(err error, msgAndArgs ...any) error {
 	if err == nil {
 		return nil
 	}
-	frame := captureFrame(2)
+	frame := CaptureFrame(2)
 	return &ConnectionProblemError{
 		TraceError: wrapTypedInternal(err, formatMessage(msgAndArgs...), frame),
 	}
@@ -559,13 +453,26 @@ func ConnectionProblem(err error, msgAndArgs ...any) error {
 // @ensures records the current call site as the first trace frame.
 // LimitExceeded creates a new LimitExceededError
 func LimitExceeded(msgAndArgs ...any) error {
-	frame := captureFrame(2)
+	frame := CaptureFrame(2)
 	return &LimitExceededError{
 		TraceError: &TraceError{
 			Message: formatMessage(msgAndArgs...),
 			Frames:  Frames{frame},
-			Fields:  make(map[string]any),
 		},
+	}
+}
+
+// @intent reclassify an existing failure as a quota or rate-limit failure while keeping its cause.
+// @domainRule returns nil unchanged when the source error is nil.
+// @ensures prepends the current call site to any existing trace frames on the returned error.
+// WrapLimitExceeded wraps an existing error as a LimitExceededError.
+func WrapLimitExceeded(err error, msgAndArgs ...any) error {
+	if err == nil {
+		return nil
+	}
+	frame := CaptureFrame(2)
+	return &LimitExceededError{
+		TraceError: wrapTypedInternal(err, formatMessage(msgAndArgs...), frame),
 	}
 }
 
@@ -579,7 +486,7 @@ func Timeout(err error, msgAndArgs ...any) error {
 	if err == nil {
 		return nil
 	}
-	frame := captureFrame(2)
+	frame := CaptureFrame(2)
 	return &TimeoutError{
 		TraceError: wrapTypedInternal(err, formatMessage(msgAndArgs...), frame),
 	}
@@ -593,7 +500,7 @@ func IsNotFound(err error) bool {
 		return false
 	}
 	var e ErrorNotFound
-	return errors.As(err, &e) && e.IsNotFound()
+	return chainAs(err, &e) && e.IsNotFound()
 }
 
 // @intent detect duplicate-resource failures anywhere in an error chain.
@@ -604,7 +511,7 @@ func IsAlreadyExists(err error) bool {
 		return false
 	}
 	var e ErrorAlreadyExists
-	return errors.As(err, &e) && e.IsAlreadyExists()
+	return chainAs(err, &e) && e.IsAlreadyExists()
 }
 
 // @intent detect caller-input failures anywhere in an error chain.
@@ -615,7 +522,7 @@ func IsBadParameter(err error) bool {
 		return false
 	}
 	var e ErrorBadParameter
-	return errors.As(err, &e) && e.IsBadParameter()
+	return chainAs(err, &e) && e.IsBadParameter()
 }
 
 // @intent detect unsupported-operation failures anywhere in an error chain.
@@ -626,7 +533,7 @@ func IsNotImplemented(err error) bool {
 		return false
 	}
 	var e ErrorNotImplemented
-	return errors.As(err, &e) && e.IsNotImplemented()
+	return chainAs(err, &e) && e.IsNotImplemented()
 }
 
 // @intent detect authentication failures anywhere in an error chain.
@@ -637,7 +544,7 @@ func IsUnauthenticated(err error) bool {
 		return false
 	}
 	var e ErrorUnauthenticated
-	return errors.As(err, &e) && e.IsUnauthenticated()
+	return chainAs(err, &e) && e.IsUnauthenticated()
 }
 
 // @intent detect authorization failures anywhere in an error chain.
@@ -648,7 +555,7 @@ func IsAccessDenied(err error) bool {
 		return false
 	}
 	var e ErrorAccessDenied
-	return errors.As(err, &e) && e.IsAccessDenied()
+	return chainAs(err, &e) && e.IsAccessDenied()
 }
 
 // @intent detect state-conflict failures anywhere in an error chain.
@@ -659,7 +566,7 @@ func IsConflict(err error) bool {
 		return false
 	}
 	var e ErrorConflict
-	return errors.As(err, &e) && e.IsConflict()
+	return chainAs(err, &e) && e.IsConflict()
 }
 
 // @intent detect transient transport or infrastructure failures anywhere in an error chain.
@@ -670,7 +577,7 @@ func IsConnectionProblem(err error) bool {
 		return false
 	}
 	var e ErrorConnectionProblem
-	return errors.As(err, &e) && e.IsConnectionProblem()
+	return chainAs(err, &e) && e.IsConnectionProblem()
 }
 
 // @intent detect throttling or quota failures anywhere in an error chain.
@@ -681,7 +588,7 @@ func IsLimitExceeded(err error) bool {
 		return false
 	}
 	var e ErrorLimitExceeded
-	return errors.As(err, &e) && e.IsLimitExceeded()
+	return chainAs(err, &e) && e.IsLimitExceeded()
 }
 
 // @intent detect timeout failures anywhere in an error chain.
@@ -692,7 +599,7 @@ func IsTimeout(err error) bool {
 		return false
 	}
 	var e ErrorTimeout
-	return errors.As(err, &e) && e.IsTimeout()
+	return chainAs(err, &e) && e.IsTimeout()
 }
 
 // @intent detect failures that explicitly advertise retry-safe semantics.
@@ -703,22 +610,7 @@ func IsRetryable(err error) bool {
 		return false
 	}
 	var e ErrorRetryable
-	return errors.As(err, &e) && e.IsRetryable()
-}
-
-// @intent translate trace error categories into HTTP response codes at service boundaries.
-// @domainRule typed errors decide the status code; unknown errors default to HTTP 500.
-// @ensures returns HTTP 200 for nil errors and HTTP 500 for unknown non-typed errors.
-// GetHTTPStatusCode returns the HTTP status code for an error
-func GetHTTPStatusCode(err error) int {
-	if err == nil {
-		return http.StatusOK
-	}
-	var e HTTPStatusCode
-	if errors.As(err, &e) {
-		return e.HTTPStatusCode()
-	}
-	return http.StatusInternalServerError
+	return chainAs(err, &e) && e.IsRetryable()
 }
 
 // @intent preserve multiple concurrent failures as one error value for later inspection.
@@ -727,7 +619,7 @@ func GetHTTPStatusCode(err error) int {
 // Aggregate combines multiple errors into a single error using errors.Join (Go 1.20+)
 func Aggregate(errs ...error) error {
 	// Filter out nil errors
-	var nonNil []error
+	nonNil := make([]error, 0, len(errs))
 	for _, err := range errs {
 		if err != nil {
 			nonNil = append(nonNil, err)
@@ -768,36 +660,4 @@ func (e *AggregateError) Error() string {
 // Unwrap returns the list of errors (Go 1.20+ multiple error unwrapping)
 func (e *AggregateError) Unwrap() []error {
 	return e.Errs
-}
-
-// @intent choose the safe semantic HTTP representation with the highest child status.
-// @domainRule classification priority matches AggregateError.HTTPStatusCode rather than traversal order.
-func (e *AggregateError) HTTPError() HTTPError {
-	var selected HTTPError
-	for _, err := range e.Errs {
-		candidate := ToHTTPError(err)
-		if candidate.Status > selected.Status {
-			selected = candidate
-		}
-	}
-	if selected.Status == 0 {
-		return internalHTTPError()
-	}
-	return selected
-}
-
-// @intent choose one HTTP status code that best represents the aggregate failure set.
-// @domainRule the highest child status code wins, with 500 as the fallback for all-OK children.
-// HTTPStatusCode returns the most severe HTTP status code
-func (e *AggregateError) HTTPStatusCode() int {
-	code := http.StatusOK
-	for _, err := range e.Errs {
-		if c := GetHTTPStatusCode(err); c > code {
-			code = c
-		}
-	}
-	if code == http.StatusOK {
-		return http.StatusInternalServerError
-	}
-	return code
 }

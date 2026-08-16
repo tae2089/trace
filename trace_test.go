@@ -7,14 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/tae2089/trace"
+	"github.com/tae2089/trace/v2"
 )
 
 // Example: Basic wrapping
@@ -72,40 +70,34 @@ func dbQuery() error {
 // Example: Typed errors
 func TestTypedErrors(t *testing.T) {
 	tests := []struct {
-		name       string
-		err        error
-		checkFunc  func(error) bool
-		statusCode int
+		name      string
+		err       error
+		checkFunc func(error) bool
 	}{
 		{
-			name:       "NotFound",
-			err:        trace.NotFound(fmt.Sprintf("user %s not found", "abc123")),
-			checkFunc:  trace.IsNotFound,
-			statusCode: http.StatusNotFound,
+			name:      "NotFound",
+			err:       trace.NotFound(fmt.Sprintf("user %s not found", "abc123")),
+			checkFunc: trace.IsNotFound,
 		},
 		{
-			name:       "AlreadyExists",
-			err:        trace.AlreadyExists("user already exists"),
-			checkFunc:  trace.IsAlreadyExists,
-			statusCode: http.StatusConflict,
+			name:      "AlreadyExists",
+			err:       trace.AlreadyExists("user already exists"),
+			checkFunc: trace.IsAlreadyExists,
 		},
 		{
-			name:       "BadParameter",
-			err:        trace.BadParameter("invalid email format"),
-			checkFunc:  trace.IsBadParameter,
-			statusCode: http.StatusBadRequest,
+			name:      "BadParameter",
+			err:       trace.BadParameter("invalid email format"),
+			checkFunc: trace.IsBadParameter,
 		},
 		{
-			name:       "AccessDenied",
-			err:        trace.AccessDenied("insufficient permissions"),
-			checkFunc:  trace.IsAccessDenied,
-			statusCode: http.StatusForbidden,
+			name:      "AccessDenied",
+			err:       trace.AccessDenied("insufficient permissions"),
+			checkFunc: trace.IsAccessDenied,
 		},
 		{
-			name:       "LimitExceeded",
-			err:        trace.LimitExceeded("rate limit exceeded"),
-			checkFunc:  trace.IsLimitExceeded,
-			statusCode: http.StatusTooManyRequests,
+			name:      "LimitExceeded",
+			err:       trace.LimitExceeded("rate limit exceeded"),
+			checkFunc: trace.IsLimitExceeded,
 		},
 	}
 
@@ -113,9 +105,6 @@ func TestTypedErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if !tt.checkFunc(tt.err) {
 				t.Errorf("%s check failed", tt.name)
-			}
-			if code := trace.GetHTTPStatusCode(tt.err); code != tt.statusCode {
-				t.Errorf("expected status %d, got %d", tt.statusCode, code)
 			}
 		})
 	}
@@ -130,6 +119,74 @@ func TestWrapPreservesType(t *testing.T) {
 	if !trace.IsNotFound(wrapped) {
 		t.Error("wrapped error should still be NotFound")
 	}
+}
+
+// WrapWithFields and the WithField fallback path both write into the fields
+// map of a freshly created TraceError, so they must work even when the
+// constructor did not allocate one.
+func TestFieldWritesOnFreshErrors(t *testing.T) {
+	t.Run("WrapWithFields", func(t *testing.T) {
+		err := trace.WrapWithFields(errors.New("boom"), map[string]any{"a": 1}, "failed")
+		if fields := trace.GetFields(err); fields["a"] != 1 {
+			t.Fatalf("expected field a=1, got %v", fields)
+		}
+	})
+
+	t.Run("WithField on a non-trace error", func(t *testing.T) {
+		err := trace.WithField(errors.New("boom"), "b", 2)
+		if fields := trace.GetFields(err); fields["b"] != 2 {
+			t.Fatalf("expected field b=2, got %v", fields)
+		}
+	})
+
+	t.Run("WithFields on a non-trace error", func(t *testing.T) {
+		err := trace.WithFields(errors.New("boom"), map[string]any{"c": 3})
+		if fields := trace.GetFields(err); fields["c"] != 3 {
+			t.Fatalf("expected field c=3, got %v", fields)
+		}
+	})
+
+	t.Run("GetFields on a plain wrap is non-nil", func(t *testing.T) {
+		if fields := trace.GetFields(trace.Wrap(errors.New("boom"))); fields == nil {
+			t.Fatal("GetFields on a trace error must return a non-nil map")
+		}
+	})
+}
+
+// asRedirector only exposes its inner error through the As(any) bool hook,
+// never through Unwrap. Chain walking must honor it exactly like errors.As.
+type asRedirector struct{ inner error }
+
+func (a *asRedirector) Error() string { return "redirected: " + a.inner.Error() }
+
+func (a *asRedirector) As(target any) bool {
+	if p, ok := target.(*trace.ErrorNotFound); ok {
+		var e trace.ErrorNotFound
+		if errors.As(a.inner, &e) {
+			*p = e
+			return true
+		}
+	}
+	return false
+}
+
+func TestChainWalkingMatchesErrorsAsSemantics(t *testing.T) {
+	t.Run("honors As(any) bool", func(t *testing.T) {
+		err := &asRedirector{inner: trace.NotFound("user missing")}
+		if !trace.IsNotFound(err) {
+			t.Fatal("IsNotFound must honor a custom As method like errors.As does")
+		}
+	})
+
+	t.Run("traverses aggregate branches", func(t *testing.T) {
+		agg := trace.Aggregate(errors.New("plain"), trace.NotFound("gone"))
+		if !trace.IsNotFound(agg) {
+			t.Fatal("IsNotFound must find matches inside aggregate branches")
+		}
+		if trace.IsAccessDenied(agg) {
+			t.Fatal("IsAccessDenied must not match this aggregate")
+		}
+	})
 }
 
 // Example: With fields for structured logging
@@ -179,28 +236,6 @@ func TestAggregateErrors(t *testing.T) {
 	}
 	if !trace.IsAccessDenied(combined) {
 		t.Error("should match AccessDenied")
-	}
-}
-
-// Example: HTTP middleware
-func TestHTTPMiddleware(t *testing.T) {
-	handler := trace.ErrorMiddleware(func(w http.ResponseWriter, r *http.Request) error {
-		return trace.NotFound("resource not found")
-	})
-
-	req := httptest.NewRequest("GET", "/test", nil)
-	rec := httptest.NewRecorder()
-
-	handler(rec, req)
-
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("expected 404, got %d", rec.Code)
-	}
-
-	var resp trace.ErrorResponse
-	json.NewDecoder(rec.Body).Decode(&resp)
-	if resp.Error.Code != trace.CodeNotFound {
-		t.Error("response error code mismatch")
 	}
 }
 
@@ -430,35 +465,6 @@ type User struct {
 	ID string
 }
 
-// Benchmark
-func BenchmarkWrap(b *testing.B) {
-	err := errors.New("original error")
-	b.ResetTimer()
-	for range b.N {
-		_ = trace.Wrap(err, "wrapped")
-	}
-}
-
-func BenchmarkWrapChain(b *testing.B) {
-	err := errors.New("original error")
-	b.ResetTimer()
-	for range b.N {
-		e := trace.Wrap(err, "level 1")
-		e = trace.Wrap(e, "level 2")
-		e = trace.Wrap(e, "level 3")
-		_ = e
-	}
-}
-
-func BenchmarkIsNotFound(b *testing.B) {
-	err := trace.NotFound("not found")
-	err = trace.Wrap(err, "wrapped")
-	b.ResetTimer()
-	for range b.N {
-		_ = trace.IsNotFound(err)
-	}
-}
-
 // Example output
 func ExampleWrap() {
 	err := errors.New("connection refused")
@@ -578,27 +584,6 @@ func TestWrapTypedPreservesFields(t *testing.T) {
 
 	if fields["key1"] != "val1" {
 		t.Errorf("WrapNotFound should preserve inner fields, got: %v", fields)
-	}
-}
-
-// P3: WrapHTTPError preserves frames/fields
-func TestWrapHTTPErrorPreservesFramesAndFields(t *testing.T) {
-	inner := trace.Wrap(errors.New("root"), "inner")
-	inner = trace.WithField(inner, "req_id", "r1")
-	innerFrameCount := len(trace.GetFrames(inner))
-
-	wrapped := trace.WrapHTTPError(inner, 503, "service down")
-	wrappedFrames := trace.GetFrames(wrapped)
-	wrappedFields := trace.GetFields(wrapped)
-
-	if len(wrappedFrames) < innerFrameCount+1 {
-		t.Errorf("WrapHTTPError should accumulate frames: got %d, inner had %d", len(wrappedFrames), innerFrameCount)
-	}
-	if wrappedFields["req_id"] != "r1" {
-		t.Error("WrapHTTPError should preserve inner fields")
-	}
-	if wrappedFields["http_status"] != 503 {
-		t.Error("WrapHTTPError should set http_status field")
 	}
 }
 

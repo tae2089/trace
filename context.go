@@ -118,7 +118,7 @@ func FromContext(ctx context.Context) error {
 		return nil
 	}
 
-	frame := captureFrame(2)
+	frame := CaptureFrame(2)
 
 	// Prefer context.Cause over ctx.Err() — it carries the original cancellation reason
 	inner := context.Cause(ctx)
@@ -177,13 +177,17 @@ type CanceledError struct {
 // @intent advertise cancellation semantics for behavior-based error checks.
 func (e *CanceledError) IsCanceled() bool { return true }
 
-// @intent map cancellation failures to HTTP 499-style client-aborted responses.
-// HTTP 499 follows the nginx-style Client Closed Request convention.
-func (e *CanceledError) HTTPStatusCode() int { return 499 }
-
-// @intent expose only a fixed cancellation message to clients.
-func (e *CanceledError) HTTPError() HTTPError {
-	return HTTPError{Status: 499, Code: CodeCanceled, Message: "request canceled"}
+// @intent wrap an existing cancellation cause as a typed trace error.
+// @domainRule returns nil unchanged when the source error is nil.
+// @ensures records the current call site as the first trace frame.
+// Canceled wraps err as a CanceledError.
+func Canceled(err error, msgAndArgs ...any) error {
+	if err == nil {
+		return nil
+	}
+	return &CanceledError{
+		TraceError: wrapTypedInternal(err, formatMessage(msgAndArgs...), CaptureFrame(2)),
+	}
 }
 
 // @intent delegate user-facing string rendering to the embedded TraceError.
@@ -207,7 +211,7 @@ func IsCanceled(err error) bool {
 		return false
 	}
 	var e ErrorCanceled
-	if errors.As(err, &e) && e.IsCanceled() {
+	if chainAs(err, &e) && e.IsCanceled() {
 		return true
 	}
 	return errors.Is(err, context.Canceled)

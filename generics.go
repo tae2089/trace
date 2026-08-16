@@ -30,12 +30,11 @@ func Err[T any](err error) Result[T] {
 // @ensures records the current call site as the first trace frame.
 // ErrMsg creates a failed Result with a message
 func ErrMsg[T any](msg string) Result[T] {
-	frame := captureFrame(2)
+	frame := CaptureFrame(2)
 	return Result[T]{
 		err: &TraceError{
 			Message: msg,
 			Frames:  Frames{frame},
-			Fields:  make(map[string]any),
 		},
 	}
 }
@@ -133,12 +132,11 @@ func FlatMap[T, U any](r Result[T], fn func(T) Result[U]) Result[U] {
 // Try wraps a function call that returns (T, error) into a Result
 func Try[T any](value T, err error) Result[T] {
 	if err != nil {
-		frame := captureFrame(2)
+		frame := CaptureFrame(2)
 		return Result[T]{
 			err: &TraceError{
 				Err:    err,
 				Frames: Frames{frame},
-				Fields: make(map[string]any),
 			},
 		}
 	}
