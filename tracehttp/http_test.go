@@ -704,3 +704,28 @@ func TestToHTTPErrorHidesFilesystemPathsFromConvertedSystemErrors(t *testing.T) 
 		t.Fatalf("expected the generic code fallback, got %q", got.Message)
 	}
 }
+
+// WithField/WithFields must not drop the explicit status override carried by
+// WrapHTTPError's wrapper (github.com/tae2089/trace/v2 TraceErrorReplacer hook).
+func TestWithFieldKeepsStatusOverride(t *testing.T) {
+	base := errors.New("teapot broke")
+	wrapped := tracehttp.WrapHTTPError(base, http.StatusTeapot)
+
+	withField := trace.WithField(wrapped, "req_id", "r1")
+	if got := tracehttp.GetHTTPStatusCode(withField); got != http.StatusTeapot {
+		t.Errorf("WithField dropped the status override: got %d, want %d", got, http.StatusTeapot)
+	}
+	if fields := trace.GetFields(withField); fields["req_id"] != "r1" {
+		t.Errorf("field not attached: %v", fields)
+	}
+
+	withFields := trace.WithFields(wrapped, map[string]any{"a": 1, "b": 2})
+	if got := tracehttp.GetHTTPStatusCode(withFields); got != http.StatusTeapot {
+		t.Errorf("WithFields dropped the status override: got %d, want %d", got, http.StatusTeapot)
+	}
+
+	// The original must stay untouched (immutability contract).
+	if fields := trace.GetFields(wrapped); fields["req_id"] != nil {
+		t.Errorf("original error mutated: %v", fields)
+	}
+}

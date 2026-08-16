@@ -142,15 +142,23 @@ WrapHTTPError wraps an error with HTTP status code information.
 - **Lines:** 512–512
 - **Intent:** expose the wrapped error to standard Go error traversal.
 
+### ReplaceTraceError
+- **Lines:** 518–523
+- **Intent:** keep the explicit status override alive when trace.WithField or trace.WithFields rebuild the chain.
+- **Ensures:**
+  - returns ok=false when original is not this wrapper's direct inner TraceError.
+ReplaceTraceError implements trace.TraceErrorReplacer so the status override
+survives field updates.
+
 ### NewClient
-- **Lines:** 523–528
+- **Lines:** 534–539
 - **Intent:** provide an HTTP client wrapper that returns trace-classified transport failures.
 - **Ensures:**
   - falls back to http.DefaultClient when no custom client is supplied.
 NewClient creates a new trace-aware HTTP client.
 
 ### Do
-- **Lines:** 534–543
+- **Lines:** 545–554
 - **Intent:** classify outbound HTTP transport failures into timeout or connection problem errors.
 - **Domain Rules:**
   - deadline exceeded maps to Timeout and other transport failures map to ConnectionProblem.
@@ -180,7 +188,7 @@ ErrorResponse represents a structured JSON error response.
 - **Intent:** carry an explicit HTTP status override for errors that do not map to one of the standard typed categories.
 
 ### Client
-- **Lines:** 516–518
+- **Lines:** 527–529
 - **Intent:** wrap http.Client so transport failures come back as trace-classified errors.
 Client is an HTTP client that wraps errors with trace information.
 

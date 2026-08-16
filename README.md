@@ -702,11 +702,12 @@ import (
 | `trace.ErrorMiddlewareWithLogger` | Removed |
 | `trace.RecoverMiddleware` | Removed |
 
-Known gap: `trace.WithField` and `trace.WithFields` rebuild an error chain
-through a fixed list of built-in wrapper types, so calling them on the result of
-`tracehttp.WrapHTTPError` drops the status override. Attach fields before
-wrapping. This limitation applies to any third-party wrapper type and predates
-v2.
+`trace.WithField` and `trace.WithFields` rebuild an error chain when they
+replace the inner `*TraceError`. Built-in wrapper types and
+`tracehttp.WrapHTTPError`'s status override survive this. A third-party wrapper
+type is dropped unless it implements `trace.TraceErrorReplacer` — one method,
+`ReplaceTraceError(original, replacement *TraceError) (error, bool)`, that
+rebuilds the wrapper around the replacement.
 
 ## Requirements
 
@@ -732,6 +733,9 @@ v2.
 - **Added**: `ConvertSystemError(err)` for `os`, `io/fs`, and `syscall` failures
 - **Added**: `Canceled(err, msg)` and `WrapLimitExceeded(err, msg)` constructors
 - **Added**: `CaptureFrame(skip)` is now exported so other packages can build trace errors
+- **Added**: `TraceErrorReplacer` hook so wrapper types outside the package survive
+  `WithField`/`WithFields`; `tracehttp.WrapHTTPError`'s status override now survives them
+  (it was silently dropped in v1)
 - **Breaking**: `Frame` stores only a program counter; `Function`, `File`, and `Line` are
   methods now, and symbol resolution happens at render time. `MarshalJSON` keeps the
   `{"function","file","line"}` wire shape

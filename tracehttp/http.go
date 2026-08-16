@@ -511,6 +511,17 @@ func (e *statusError) Error() string { return e.err.Error() }
 // @intent expose the wrapped error to standard Go error traversal.
 func (e *statusError) Unwrap() error { return e.err }
 
+// @intent keep the explicit status override alive when trace.WithField or trace.WithFields rebuild the chain.
+// @ensures returns ok=false when original is not this wrapper's direct inner TraceError.
+// ReplaceTraceError implements trace.TraceErrorReplacer so the status override
+// survives field updates.
+func (e *statusError) ReplaceTraceError(original, replacement *trace.TraceError) (error, bool) {
+	if te, ok := e.err.(*trace.TraceError); ok && te == original {
+		return &statusError{err: replacement, status: e.status}, true
+	}
+	return nil, false
+}
+
 // @intent wrap http.Client so transport failures come back as trace-classified errors.
 // Client is an HTTP client that wraps errors with trace information.
 type Client struct {

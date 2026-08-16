@@ -232,19 +232,19 @@ It returns a new wrapper error with the field added, preserving the original err
 - **Calls:** copyFields
 
 ### replaceTraceError
-- **Lines:** 515–568
+- **Lines:** 527–586
 - **Intent:** swap the inner TraceError while preserving known wrapper types around it.
 - **Domain Rules:**
   - built-in typed wrappers are recreated so errors.Is and errors.As continue to work.
 
 ### copyFields
-- **Lines:** 572–578
+- **Lines:** 590–596
 - **Intent:** defensively copy structured error fields before mutation or external exposure.
 - **Ensures:**
   - returns a new map containing every existing field.
 
 ### DebugReport
-- **Lines:** 584–596
+- **Lines:** 602–614
 - **Intent:** render a full developer-facing report for nested and aggregated error chains.
 - **Domain Rules:**
   - aggregate errors must include every branch in the rendered report.
@@ -254,14 +254,14 @@ DebugReport returns a detailed report of the error chain
 - **Calls:** debugReportWalk
 
 ### debugReportWalk
-- **Lines:** 600–635
+- **Lines:** 618–653
 - **Intent:** recursively expand an error tree into the developer-facing debug report.
 - **Ensures:**
   - traverses both single-cause chains and aggregate branches.
 - **Calls:** Error, Unwrap, Unwrap, debugReportWalk, debugReportWalk
 
 ### UserMessage
-- **Lines:** 641–656
+- **Lines:** 659–674
 - **Intent:** extract the safest high-level message to show outside debugging channels.
 - **Domain Rules:**
   - prefer explicit TraceError messages before falling back to wrapped causes.
@@ -271,7 +271,7 @@ UserMessage returns a user-friendly error message without stack traces
 - **Calls:** Error, findTraceError, UserMessage
 
 ### Errors
-- **Lines:** 664–668
+- **Lines:** 682–686
 - **Intent:** iterate every error reachable from wrapped and aggregated trace errors.
 - **Domain Rules:**
   - aggregate branches are traversed recursively, not flattened into a single message.
@@ -283,7 +283,7 @@ recursively traversing Unwrap() []error (e.g., AggregateError).
 - **Calls:** errorsWalk
 
 ### errorsWalk
-- **Lines:** 672–688
+- **Lines:** 690–706
 - **Intent:** recursively traverse every reachable error in a chain or aggregate until the consumer stops.
 - **Ensures:**
   - returns false as soon as the yield function asks traversal to stop.
@@ -311,3 +311,15 @@ TraceError is the core error type that captures stack traces
 - **Lines:** 88–88
 - **Intent:** represent an ordered stack trace that can be rendered or serialized with an error.
 Frames is a slice of stack frames
+
+### TraceErrorReplacer
+- **Lines:** 521–523
+- **Intent:** let custom wrapper types survive field updates instead of being peeled away.
+- **Domain Rules:**
+  - the wrapper must return ok=false when original is not its direct inner TraceError.
+TraceErrorReplacer lets wrapper types outside this package survive WithField
+and WithFields. When those functions rebuild an error chain they replace the
+inner *TraceError; wrappers this package does not know are otherwise dropped.
+A wrapper that implements this method is asked to rebuild itself around
+replacement and report ok=true, or ok=false if original is not its inner
+TraceError.

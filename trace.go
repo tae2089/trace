@@ -510,11 +510,29 @@ func cloneTraceError(te *TraceError) *TraceError {
 	}
 }
 
+// @intent let custom wrapper types survive field updates instead of being peeled away.
+// @domainRule the wrapper must return ok=false when original is not its direct inner TraceError.
+// TraceErrorReplacer lets wrapper types outside this package survive WithField
+// and WithFields. When those functions rebuild an error chain they replace the
+// inner *TraceError; wrappers this package does not know are otherwise dropped.
+// A wrapper that implements this method is asked to rebuild itself around
+// replacement and report ok=true, or ok=false if original is not its inner
+// TraceError.
+type TraceErrorReplacer interface {
+	ReplaceTraceError(original, replacement *TraceError) (rebuilt error, ok bool)
+}
+
 // @intent swap the inner TraceError while preserving known wrapper types around it.
 // @domainRule built-in typed wrappers are recreated so errors.Is and errors.As continue to work.
 func replaceTraceError(err error, original *TraceError, replacement *TraceError) error {
 	if err == original {
 		return replacement
+	}
+
+	if r, ok := err.(TraceErrorReplacer); ok {
+		if rebuilt, replaced := r.ReplaceTraceError(original, replacement); replaced {
+			return rebuilt
+		}
 	}
 
 	switch e := err.(type) {

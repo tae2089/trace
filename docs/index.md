@@ -1,7 +1,7 @@
 <!-- generated-by: code-context-graph docs -->
 # Code Context Index
 
-Generated: 2026-08-16 08:46
+Generated: 2026-08-16 09:04
 
 ## Files
 
@@ -16,8 +16,8 @@ Generated: 2026-08-16 08:46
 | [syserrors.go](syserrors.go.md) | 4 | Translation of operating system, filesystem, and network errors into typed trace categories. |
 | [syserrors_errno.go](syserrors_errno.go.md) | 1 | — |
 | [syserrors_other.go](syserrors_other.go.md) | 1 | — |
-| [trace.go](trace.go.md) | 37 | Core error wrapping, stack capture, and structured error inspection APIs. |
-| [tracehttp/http.go](tracehttp/http.go.md) | 29 | HTTP adapters that translate trace errors into API responses, middleware behavior, and client-side classifications. |
+| [trace.go](trace.go.md) | 38 | Core error wrapping, stack capture, and structured error inspection APIs. |
+| [tracehttp/http.go](tracehttp/http.go.md) | 30 | HTTP adapters that translate trace errors into API responses, middleware behavior, and client-side classifications. |
 
 ## All Symbols
 
@@ -64,21 +64,21 @@ Generated: 2026-08-16 08:46
 | [ConvertSystemError](syserrors.go.md#convertsystemerror) | function | syserrors.go |
 | [DebugReport](trace.go.md#debugreport) | function | trace.go |
 | [DetachedContext](context.go.md#detachedcontext) | function | context.go |
-| [Do](context.go.md#do) | function | context.go |
 | [Do](tracehttp/http.go.md#do) | function | tracehttp/http.go |
+| [Do](context.go.md#do) | function | context.go |
 | [DoValue](context.go.md#dovalue) | function | context.go |
 | [Enabled](slog.go.md#enabled) | function | slog.go |
 | [Err](generics.go.md#err) | function | generics.go |
 | [ErrMsg](generics.go.md#errmsg) | function | generics.go |
-| [Error](errors.go.md#error) | function | errors.go |
-| [Error](errors.go.md#error) | function | errors.go |
 | [Error](generics.go.md#error) | function | generics.go |
+| [Error](tracehttp/http.go.md#error) | function | tracehttp/http.go |
+| [Error](errors.go.md#error) | function | errors.go |
+| [Error](errors.go.md#error) | function | errors.go |
+| [Error](errors.go.md#error) | function | errors.go |
 | [Error](errors.go.md#error) | function | errors.go |
 | [Error](errors.go.md#error) | function | errors.go |
 | [Error](errors.go.md#error) | function | errors.go |
 | [Error](context.go.md#error) | function | context.go |
-| [Error](errors.go.md#error) | function | errors.go |
-| [Error](tracehttp/http.go.md#error) | function | tracehttp/http.go |
 | [Error](errors.go.md#error) | function | errors.go |
 | [Error](errors.go.md#error) | function | errors.go |
 | [Error](errors.go.md#error) | function | errors.go |
@@ -135,8 +135,8 @@ Generated: 2026-08-16 08:46
 | [Line](trace.go.md#line) | function | trace.go |
 | [LogDebug](slog.go.md#logdebug) | function | slog.go |
 | [LogError](slog.go.md#logerror) | function | slog.go |
-| [LogValue](trace.go.md#logvalue) | function | trace.go |
 | [LogValue](errors.go.md#logvalue) | function | errors.go |
+| [LogValue](trace.go.md#logvalue) | function | trace.go |
 | [LogWarn](slog.go.md#logwarn) | function | slog.go |
 | [Map](generics.go.md#map) | function | generics.go |
 | [MapErr](generics.go.md#maperr) | function | generics.go |
@@ -155,6 +155,7 @@ Generated: 2026-08-16 08:46
 | [ReadErrorResponse](tracehttp/http.go.md#readerrorresponse) | function | tracehttp/http.go |
 | [Recover](generics.go.md#recover) | function | generics.go |
 | [RecoverWith](generics.go.md#recoverwith) | function | generics.go |
+| [ReplaceTraceError](tracehttp/http.go.md#replacetraceerror) | function | tracehttp/http.go |
 | [Result](generics.go.md#result) | function | generics.go |
 | [SlogError](slog.go.md#slogerror) | function | slog.go |
 | [SlogErrorValue](slog.go.md#slogerrorvalue) | function | slog.go |
@@ -169,18 +170,18 @@ Generated: 2026-08-16 08:46
 | [TransformPipeline](generics.go.md#transformpipeline) | function | generics.go |
 | [Try](generics.go.md#try) | function | generics.go |
 | [Unauthenticated](errors.go.md#unauthenticated) | function | errors.go |
+| [Unwrap](errors.go.md#unwrap) | function | errors.go |
+| [Unwrap](errors.go.md#unwrap) | function | errors.go |
 | [Unwrap](context.go.md#unwrap) | function | context.go |
 | [Unwrap](errors.go.md#unwrap) | function | errors.go |
+| [Unwrap](trace.go.md#unwrap) | function | trace.go |
 | [Unwrap](errors.go.md#unwrap) | function | errors.go |
-| [Unwrap](tracehttp/http.go.md#unwrap) | function | tracehttp/http.go |
+| [Unwrap](errors.go.md#unwrap) | function | errors.go |
+| [Unwrap](errors.go.md#unwrap) | function | errors.go |
+| [Unwrap](errors.go.md#unwrap) | function | errors.go |
 | [Unwrap](errors.go.md#unwrap) | function | errors.go |
 | [Unwrap](generics.go.md#unwrap) | function | generics.go |
-| [Unwrap](errors.go.md#unwrap) | function | errors.go |
-| [Unwrap](errors.go.md#unwrap) | function | errors.go |
-| [Unwrap](errors.go.md#unwrap) | function | errors.go |
-| [Unwrap](errors.go.md#unwrap) | function | errors.go |
-| [Unwrap](errors.go.md#unwrap) | function | errors.go |
-| [Unwrap](trace.go.md#unwrap) | function | trace.go |
+| [Unwrap](tracehttp/http.go.md#unwrap) | function | tracehttp/http.go |
 | [Unwrap](errors.go.md#unwrap) | function | errors.go |
 | [Unwrap](errors.go.md#unwrap) | function | errors.go |
 | [Unwrap](errors.go.md#unwrap) | function | errors.go |
@@ -215,8 +216,8 @@ Generated: 2026-08-16 08:46
 | [classify](tracehttp/http.go.md#classify) | function | tracehttp/http.go |
 | [cloneTraceError](trace.go.md#clonetraceerror) | function | trace.go |
 | [contextFieldsToMap](context.go.md#contextfieldstomap) | function | context.go |
-| [convertErrno](syserrors_other.go.md#converterrno) | function | syserrors_other.go |
 | [convertErrno](syserrors_errno.go.md#converterrno) | function | syserrors_errno.go |
+| [convertErrno](syserrors_other.go.md#converterrno) | function | syserrors_other.go |
 | [copyFields](trace.go.md#copyfields) | function | trace.go |
 | [debugReportWalk](trace.go.md#debugreportwalk) | function | trace.go |
 | [errorCause](slog.go.md#errorcause) | function | slog.go |
@@ -256,6 +257,7 @@ Generated: 2026-08-16 08:46
 | [ErrorUnauthenticated](errors.go.md#errorunauthenticated) | type | errors.go |
 | [Frames](trace.go.md#frames) | type | trace.go |
 | [HTTPErrorProvider](tracehttp/http.go.md#httperrorprovider) | type | tracehttp/http.go |
+| [TraceErrorReplacer](trace.go.md#traceerrorreplacer) | type | trace.go |
 | [contextKey](context.go.md#contextkey) | type | context.go |
 | [temporaryReporter](syserrors.go.md#temporaryreporter) | type | syserrors.go |
 | [timeoutReporter](syserrors.go.md#timeoutreporter) | type | syserrors.go |
