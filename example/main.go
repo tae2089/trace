@@ -4,6 +4,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -77,9 +78,9 @@ func getUserService(userID string) (*User, error) {
 // @intent demonstrate repository-layer translation from storage failures into typed trace errors.
 // repoFindUser simulates database query
 func repoFindUser(userID string) (*User, error) {
-	// Simulate database error
-	err := sql.ErrNoRows
-	if err == sql.ErrNoRows {
+	// Simulate a database layer that adds query context.
+	err := fmt.Errorf("query user: %w", sql.ErrNoRows)
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, trace.WrapNotFound(err, fmt.Sprintf("user %s not found in database", userID))
 	}
 	return &User{ID: userID}, nil

@@ -1,7 +1,7 @@
 <!-- generated-by: code-context-graph docs -->
 # Code Context Index
 
-Generated: 2026-08-16 09:04
+Generated: 2026-08-29 08:46
 
 ## Files
 

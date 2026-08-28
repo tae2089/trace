@@ -261,10 +261,17 @@ func WriteError(w http.ResponseWriter, err error, requestID string) error {
 // ErrorHandlerFunc is a function that handles HTTP requests and may return an error.
 type ErrorHandlerFunc func(w http.ResponseWriter, r *http.Request) error
 
-// @intent adapt error-returning handlers into standard net/http handlers.
+// @intent retain a best-effort v2 compatibility adapter for standard net/http handlers.
+// @domainRule application-owned adapters handle logging, request IDs, and response-write failures.
 // @sideEffect attaches method and path fields before writing the HTTP error response.
-// @ensures renders handler errors through the logger-free safe response writer.
+// @ensures attempts to render handler errors through the logger-free safe response writer.
 // ErrorMiddleware converts an ErrorHandlerFunc to a standard http.HandlerFunc.
+//
+// ErrorMiddleware is a best-effort convenience adapter retained for v2
+// compatibility. Because http.HandlerFunc cannot return an error, this adapter
+// cannot report failures from WriteError. Applications that need to observe
+// response-write failures should own the adapter and call WriteError directly.
+// ErrorMiddleware is a candidate for removal in v3.
 func ErrorMiddleware(h ErrorHandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		err := h(w, r)

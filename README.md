@@ -229,8 +229,8 @@ The response contains only stable client-safe fields:
 }
 ```
 
-Framework adapters such as Gin can use `ErrorResponseFor` without writing through
-`net/http`:
+Framework adapters can use `ToHTTPError` or `ErrorResponseFor` without writing
+through `net/http`; framework-specific response APIs remain application-owned:
 
 ```go
 status, response := tracehttp.ErrorResponseFor(err, requestID)
@@ -244,6 +244,13 @@ messages are never copied into the response. All 5xx messages are normalized to
 `WriteErrorWithLogger`, `ErrorMiddlewareWithLogger`, and `RecoverMiddleware`
 were removed in v2. Applications should decide logging level, duration, route,
 response-size, and panic-recovery policy themselves.
+
+`WriteError` and `ErrorMiddleware` are optional `net/http` conveniences, not the
+framework-neutral contract. `ErrorMiddleware` remains in v2 for compatibility
+and is best-effort: because `http.HandlerFunc` cannot return an error, it cannot
+report response-write failures. Applications that need to observe those
+failures should use an application-owned adapter like `Handle` above and call
+`WriteError` directly. `ErrorMiddleware` is a candidate for removal in v3.
 
 ### Which error decides the response
 
@@ -569,7 +576,7 @@ price of carrying a stack trace at all.
 func (r *UserRepo) FindByID(id string) (*User, error) {
     user, err := r.db.Query(...)
     if err != nil {
-        if err == sql.ErrNoRows {
+        if errors.Is(err, sql.ErrNoRows) {
             return nil, trace.WrapNotFound(err, "user %s not found", id)
         }
         return nil, trace.Wrap(err, "database query failed")
