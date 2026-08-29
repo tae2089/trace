@@ -2,3 +2,4 @@
 .agent-team/
 _workspace/
 ccg.db
+.ccg/
