@@ -89,6 +89,8 @@ err = trace.Wrapf(err, "load user %s", id)
 - Use meaningful non-empty context; if there is no context to add, return the
   original error.
 - `Wrap(nil, ...)` and `Wrapf(nil, ...)` return `nil`.
+- `Wrap(err, "")` and `Wrapf(err, "")` return `err` unchanged; an empty
+  message adds no frame.
 - `Error()`, `%s`, and `%v` print only ordinary error text.
 - `%+v` prints the collected trace frames for debugging.
 
