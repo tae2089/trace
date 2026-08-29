@@ -31,9 +31,8 @@ jobs:
       - name: Coverage summary
         run: go tool cover -func=coverage.out | tail -1
 
-  # The root package must stay free of net/http so that programs which only need
-  # error values do not pull the net/http and crypto/tls trees into their binaries.
-  # Everything that needs net/http belongs in ./tracehttp.
+  # Trace is a protocol-independent error-tracking core. Transport policy stays
+  # in applications, so the root package must not pull in net/http or TLS.
   root-dependency-guard:
     runs-on: ubuntu-latest
     steps:
@@ -44,7 +43,7 @@ jobs:
       - name: Reject net/http in the root package
         run: |
           if go list -deps . | grep -E '^(net/http|crypto/tls|crypto/x509)$'; then
-            echo "::error::the root package must not depend on net/http; move the code to ./tracehttp"
+            echo "::error::the Trace core must not depend on net/http; keep transport code in the application"
             exit 1
           fi
           echo "root package dependency graph is clean"

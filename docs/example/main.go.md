@@ -1,41 +1,34 @@
 <!-- generated-by: code-context-graph docs -->
 # example/main.go
 
-> Example HTTP application demonstrating application-owned logging, safe HTTP errors, and layered wrapping.
-
 ## Functions
 
 ### main
-- **Lines:** 17–25
-- **Intent:** demonstrate how an application owns request logging while trace renders safe error responses.
-- **Calls:** handle
+- **Lines:** 14–28
+- **Intent:** demonstrate plain error text, standard inspection, and opt-in trace formatting.
+- **Calls:** loadUser
 
-### handle
-- **Lines:** 28–45
-- **Intent:** keep request logging policy in the application and delegate only safe response rendering to trace.
-- **Calls:** SlogError, ToHTTPError, WriteError
+### loadUser
+- **Lines:** 31–39
+- **Intent:** add service-layer context without changing the application error meaning.
+- **Calls:** validateUserID, queryUser, Wrapf, Wrapf
 
-### getUserHandler
-- **Lines:** 49–65
-- **Intent:** show how handlers return errors to the application-owned HTTP adapter.
-getUserHandler handles GET /users/{id} requests
-- **Calls:** getUserService, Wrap
+### validateUserID
+- **Lines:** 42–47
+- **Intent:** show an application-owned typed error preserved through Trace wrappers.
+- **Calls:** Errorf
 
-### getUserService
-- **Lines:** 69–76
-- **Intent:** demonstrate service-layer wrapping that adds user-specific context before errors cross boundaries.
-getUserService retrieves a user by ID
-- **Calls:** repoFindUser, Wrapf
+### queryUser
+- **Lines:** 50–52
+- **Intent:** create a traced origin that keeps a sentinel error visible to errors.Is.
+- **Calls:** Errorf
 
-### repoFindUser
-- **Lines:** 80–87
-- **Intent:** demonstrate repository-layer translation from storage failures into typed trace errors.
-repoFindUser simulates database query
-- **Calls:** WrapNotFound
+### Error
+- **Lines:** 60–62
+- **Intent:** expose the application error message preserved by Trace.
 
 ## Classes
 
-### User
-- **Lines:** 91–94
-- **Intent:** provide a minimal response model for the trace package usage example.
-User represents a user entity
+### ValidationError
+- **Lines:** 55–57
+- **Intent:** represent application-owned validation semantics outside the Trace package.

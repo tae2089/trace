@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/tae2089/trace/v2"
+	"github.com/tae2089/trace/v3"
 )
 
 // Benchmarks for the error-construction hot path. Errors are created far more
@@ -15,7 +15,7 @@ var (
 	errSink   error
 	boolSink  bool
 	strSink   string
-	frameSink trace.Frame
+	benchRoot = errors.New("missing")
 )
 
 func BenchmarkFmtErrorfWrap(b *testing.B) {
@@ -46,42 +46,27 @@ func BenchmarkWrapDepth10(b *testing.B) {
 	}
 }
 
-func BenchmarkNotFound(b *testing.B) {
+func BenchmarkNew(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
-		errSink = trace.NotFound("user not found")
-	}
-}
-
-func BenchmarkWrapNotFound(b *testing.B) {
-	base := errors.New("no rows")
-	b.ReportAllocs()
-	for b.Loop() {
-		errSink = trace.WrapNotFound(base, "user not found")
-	}
-}
-
-func BenchmarkCaptureFrame(b *testing.B) {
-	b.ReportAllocs()
-	for b.Loop() {
-		frameSink = trace.CaptureFrame(1)
+		errSink = trace.New("not found")
 	}
 }
 
 func benchDeepError(n int) error {
-	err := error(trace.NotFound("missing"))
+	err := error(trace.Errorf("repository: %w", benchRoot))
 	for range n {
 		err = trace.Wrap(err, "layer")
 	}
 	return err
 }
 
-func BenchmarkIsNotFoundDepth10(b *testing.B) {
+func BenchmarkErrorsIsDepth10(b *testing.B) {
 	err := benchDeepError(10)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		boolSink = trace.IsNotFound(err)
+		boolSink = errors.Is(err, benchRoot)
 	}
 }
 

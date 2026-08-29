@@ -1,1033 +1,365 @@
 package trace_test
 
 import (
-	"context"
-	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
-	"time"
 
-	"github.com/tae2089/trace/v2"
+	"github.com/tae2089/trace/v3"
 )
 
-// Example: Basic wrapping
-func TestBasicWrap(t *testing.T) {
-	originalErr := errors.New("database connection failed")
-	wrapped := trace.Wrap(originalErr, "failed to fetch user")
+var errNotFound = errors.New("not found")
 
-	if wrapped == nil {
-		t.Fatal("expected wrapped error")
-	}
+type validationError struct {
+	Field string
+}
 
-	// Should contain both messages
-	if !strings.Contains(wrapped.Error(), "failed to fetch user") {
-		t.Errorf("error should contain message: %v", wrapped)
-	}
+func (e *validationError) Error() string {
+	return "validation failed: " + e.Field
+}
 
-	// Original error should be extractable
-	if !errors.Is(wrapped, originalErr) {
-		t.Error("errors.Is should match original error")
+func TestNew(t *testing.T) {
+	err := trace.New("not found")
+
+	assertPlainFormat(t, err, "not found")
+	assertDebugContainsInOrder(
+		t,
+		err,
+		"trace_test.go",
+		"TestNew",
+		"not found",
+	)
+
+	if got := errors.Unwrap(err); got != nil {
+		t.Fatalf("errors.Unwrap(New(...)) = %v, want nil", got)
 	}
 }
 
-// Example: Stack trace accumulation
-func TestStackTraceAccumulation(t *testing.T) {
-	err := serviceLayer()
-	if err == nil {
-		t.Fatal("expected error")
+func TestErrorf(t *testing.T) {
+	t.Run("preserves single wrapped cause", func(t *testing.T) {
+		err := trace.Errorf("load user: %w", errNotFound)
+
+		assertPlainFormat(t, err, "load user: not found")
+		if !errors.Is(err, errNotFound) {
+			t.Fatal("errors.Is must find the wrapped sentinel")
+		}
+		assertDebugContainsInOrder(
+			t,
+			err,
+			"trace_test.go",
+			"TestErrorf",
+			"load user: not found",
+		)
+	})
+
+	t.Run("preserves multiple wrapped causes", func(t *testing.T) {
+		errUnauthorized := errors.New("unauthorized")
+
+		err := trace.Errorf("load user: %w: %w", errNotFound, errUnauthorized)
+
+		assertPlainFormat(t, err, "load user: not found: unauthorized")
+		if !errors.Is(err, errNotFound) {
+			t.Fatal("errors.Is must find the first wrapped sentinel")
+		}
+		if !errors.Is(err, errUnauthorized) {
+			t.Fatal("errors.Is must find the second wrapped sentinel")
+		}
+		assertDebugContainsInOrder(
+			t,
+			err,
+			"branch 1",
+			"not found",
+			"branch 2",
+			"unauthorized",
+		)
+	})
+}
+
+func TestWrap(t *testing.T) {
+	cause := &validationError{Field: "email"}
+
+	err := trace.Wrap(cause, "validate user")
+	err = trace.Wrap(err, "create user")
+
+	assertPlainFormat(t, err, "create user: validate user: validation failed: email")
+	if !errors.Is(err, cause) {
+		t.Fatal("errors.Is must find the original cause")
 	}
 
-	// Should have multiple frames (serviceLayer + repository + dbQuery = 3)
-	frames := trace.GetFrames(err)
-	if len(frames) < 3 {
-		t.Errorf("expected at least 3 frames, got %d", len(frames))
+	var got *validationError
+	if !errors.As(err, &got) {
+		t.Fatal("errors.As must find the typed cause")
 	}
+	if got.Field != "email" {
+		t.Fatalf("typed cause field = %q, want email", got.Field)
+	}
+	if got := errors.Unwrap(err); got == nil {
+		t.Fatal("errors.Unwrap(Wrap(...)) must expose the wrapped cause")
+	}
+	assertDebugContainsInOrder(
+		t,
+		err,
+		"create user",
+		"trace_test.go",
+		"TestWrap",
+		"validate user",
+		"validation failed: email",
+	)
+}
 
-	// Check verbose output
-	verbose := fmt.Sprintf("%+v", err)
-	if !strings.Contains(verbose, "Stack trace") {
-		t.Error("verbose format should contain stack trace")
+func TestWrapf(t *testing.T) {
+	err := trace.Wrapf(errNotFound, "load user %d", 42)
+
+	assertPlainFormat(t, err, "load user 42: not found")
+	if !errors.Is(err, errNotFound) {
+		t.Fatal("errors.Is must find the wrapped cause")
+	}
+	assertDebugContainsInOrder(t, err, "load user 42", "not found")
+	assertDebugContainsInOrder(t, err, "trace_test.go", "TestWrapf")
+}
+
+func TestWrapNilAndEmptyContext(t *testing.T) {
+	if got := trace.Wrap(nil, "ignored"); got != nil {
+		t.Fatalf("Wrap(nil, ...) = %v, want nil", got)
+	}
+	if got := trace.Wrapf(nil, "ignored %s", "value"); got != nil {
+		t.Fatalf("Wrapf(nil, ...) = %v, want nil", got)
+	}
+	if got := trace.Wrap(errNotFound, ""); got != errNotFound {
+		t.Fatal("Wrap with empty context must return the original error")
+	}
+	if got := trace.Wrapf(errNotFound, ""); got != errNotFound {
+		t.Fatal("Wrapf with empty format must return the original error")
 	}
 }
 
-func serviceLayer() error {
-	return trace.Wrap(repository(), "service layer")
-}
+func TestJoinedErrorDebugOutput(t *testing.T) {
+	validation := trace.Wrap(&validationError{Field: "name"}, "validate user")
+	persistence := trace.Wrap(errNotFound, "save user")
 
-func repository() error {
-	return trace.Wrap(dbQuery(), "repository layer")
-}
+	err := trace.Wrap(errors.Join(validation, persistence), "create user")
 
-func dbQuery() error {
-	return trace.Wrap(errors.New("connection refused"), "db query failed")
-}
-
-// Example: Typed errors
-func TestTypedErrors(t *testing.T) {
-	tests := []struct {
-		name      string
-		err       error
-		checkFunc func(error) bool
-	}{
-		{
-			name:      "NotFound",
-			err:       trace.NotFound(fmt.Sprintf("user %s not found", "abc123")),
-			checkFunc: trace.IsNotFound,
-		},
-		{
-			name:      "AlreadyExists",
-			err:       trace.AlreadyExists("user already exists"),
-			checkFunc: trace.IsAlreadyExists,
-		},
-		{
-			name:      "BadParameter",
-			err:       trace.BadParameter("invalid email format"),
-			checkFunc: trace.IsBadParameter,
-		},
-		{
-			name:      "AccessDenied",
-			err:       trace.AccessDenied("insufficient permissions"),
-			checkFunc: trace.IsAccessDenied,
-		},
-		{
-			name:      "LimitExceeded",
-			err:       trace.LimitExceeded("rate limit exceeded"),
-			checkFunc: trace.IsLimitExceeded,
-		},
+	var got *validationError
+	if !errors.As(err, &got) {
+		t.Fatal("errors.As must find a typed error inside a joined branch")
 	}
+	if !errors.Is(err, errNotFound) {
+		t.Fatal("errors.Is must find a sentinel inside a joined branch")
+	}
+	assertDebugContainsInOrder(
+		t,
+		err,
+		"create user",
+		"branch 1",
+		"validate user",
+		"validation failed: name",
+		"branch 2",
+		"save user",
+		"not found",
+	)
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if !tt.checkFunc(tt.err) {
-				t.Errorf("%s check failed", tt.name)
+func TestDebugOutputIsDeterministic(t *testing.T) {
+	err := trace.Wrap(trace.Errorf("query user: %w", errNotFound), "load user")
+
+	first := fmt.Sprintf("%+v", err)
+	second := fmt.Sprintf("%+v", err)
+
+	if first != second {
+		t.Fatalf("debug output must be deterministic\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+}
+
+func TestDebugOutputHandlesCycles(t *testing.T) {
+	err := trace.Wrap(cyclicError{}, "cycle")
+
+	debug := fmt.Sprintf("%+v", err)
+
+	for _, want := range []string{"cycle", "cycle detected"} {
+		if !strings.Contains(debug, want) {
+			t.Fatalf("debug output %q does not contain %q", debug, want)
+		}
+	}
+}
+
+func TestDebugOutputHandlesNonComparableCycles(t *testing.T) {
+	err := trace.Wrap(nonComparableCyclicError{}, "cycle")
+
+	debug := fmt.Sprintf("%+v", err)
+
+	for _, want := range []string{"cycle", "depth limit reached"} {
+		if !strings.Contains(debug, want) {
+			t.Fatalf("debug output %q does not contain %q", debug, want)
+		}
+	}
+}
+
+func TestDebugOutputDoesNotInventNonComparableCycles(t *testing.T) {
+	second := nonComparableChainError{values: []int{2}}
+	first := nonComparableChainError{values: []int{1}, next: second}
+
+	err := trace.Wrap(first, "chain")
+
+	debug := fmt.Sprintf("%+v", err)
+	if strings.Contains(debug, "cycle detected") {
+		t.Fatalf("debug output invented a cycle for a finite chain:\n%s", debug)
+	}
+	if strings.Contains(debug, "depth limit reached") {
+		t.Fatalf("debug output hit the fallback limit for a finite two-node chain:\n%s", debug)
+	}
+	if got := strings.Count(debug, "error: repeated non-comparable"); got != 2 {
+		t.Fatalf("debug output rendered %d non-comparable nodes, want 2:\n%s", got, debug)
+	}
+}
+
+type cyclicError struct{}
+
+func (cyclicError) Error() string {
+	return "cyclic"
+}
+
+func (e cyclicError) Unwrap() error {
+	return e
+}
+
+type nonComparableCyclicError struct {
+	values []int
+}
+
+func (nonComparableCyclicError) Error() string {
+	return "non-comparable cyclic"
+}
+
+func (e nonComparableCyclicError) Unwrap() error {
+	return e
+}
+
+type nonComparableChainError struct {
+	values []int
+	next   error
+}
+
+func (nonComparableChainError) Error() string {
+	return "repeated non-comparable"
+}
+
+func (e nonComparableChainError) Unwrap() error {
+	return e.next
+}
+
+func TestConcurrentFormattingAndTraversal(t *testing.T) {
+	err := trace.Wrap(trace.Errorf("query user: %w", errNotFound), "load user")
+
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 100 {
+				if !errors.Is(err, errNotFound) {
+					t.Error("errors.Is lost the original cause")
+				}
+				_ = err.Error()
+				_ = fmt.Sprintf("%+v", err)
 			}
-		})
+		}()
+	}
+	wg.Wait()
+}
+
+func TestPublicAPI(t *testing.T) {
+	expected := []string{"Errorf", "New", "Wrap", "Wrapf"}
+	got := exportedNames(t)
+
+	if !slices.Equal(got, expected) {
+		t.Fatalf("exported API = %v, want %v", got, expected)
 	}
 }
 
-// Example: Wrapping typed errors preserves type
-func TestWrapPreservesType(t *testing.T) {
-	original := trace.NotFound("user not found")
-	wrapped := trace.Wrap(original, "service layer")
-	wrapped = trace.Wrap(wrapped, "handler layer")
+func exportedNames(t *testing.T) []string {
+	t.Helper()
 
-	if !trace.IsNotFound(wrapped) {
-		t.Error("wrapped error should still be NotFound")
-	}
-}
-
-// WrapWithFields and the WithField fallback path both write into the fields
-// map of a freshly created TraceError, so they must work even when the
-// constructor did not allocate one.
-func TestFieldWritesOnFreshErrors(t *testing.T) {
-	t.Run("WrapWithFields", func(t *testing.T) {
-		err := trace.WrapWithFields(errors.New("boom"), map[string]any{"a": 1}, "failed")
-		if fields := trace.GetFields(err); fields["a"] != 1 {
-			t.Fatalf("expected field a=1, got %v", fields)
-		}
-	})
-
-	t.Run("WithField on a non-trace error", func(t *testing.T) {
-		err := trace.WithField(errors.New("boom"), "b", 2)
-		if fields := trace.GetFields(err); fields["b"] != 2 {
-			t.Fatalf("expected field b=2, got %v", fields)
-		}
-	})
-
-	t.Run("WithFields on a non-trace error", func(t *testing.T) {
-		err := trace.WithFields(errors.New("boom"), map[string]any{"c": 3})
-		if fields := trace.GetFields(err); fields["c"] != 3 {
-			t.Fatalf("expected field c=3, got %v", fields)
-		}
-	})
-
-	t.Run("GetFields on a plain wrap is non-nil", func(t *testing.T) {
-		if fields := trace.GetFields(trace.Wrap(errors.New("boom"))); fields == nil {
-			t.Fatal("GetFields on a trace error must return a non-nil map")
-		}
-	})
-}
-
-// asRedirector only exposes its inner error through the As(any) bool hook,
-// never through Unwrap. Chain walking must honor it exactly like errors.As.
-type asRedirector struct{ inner error }
-
-func (a *asRedirector) Error() string { return "redirected: " + a.inner.Error() }
-
-func (a *asRedirector) As(target any) bool {
-	if p, ok := target.(*trace.ErrorNotFound); ok {
-		var e trace.ErrorNotFound
-		if errors.As(a.inner, &e) {
-			*p = e
-			return true
-		}
-	}
-	return false
-}
-
-func TestChainWalkingMatchesErrorsAsSemantics(t *testing.T) {
-	t.Run("honors As(any) bool", func(t *testing.T) {
-		err := &asRedirector{inner: trace.NotFound("user missing")}
-		if !trace.IsNotFound(err) {
-			t.Fatal("IsNotFound must honor a custom As method like errors.As does")
-		}
-	})
-
-	t.Run("traverses aggregate branches", func(t *testing.T) {
-		agg := trace.Aggregate(errors.New("plain"), trace.NotFound("gone"))
-		if !trace.IsNotFound(agg) {
-			t.Fatal("IsNotFound must find matches inside aggregate branches")
-		}
-		if trace.IsAccessDenied(agg) {
-			t.Fatal("IsAccessDenied must not match this aggregate")
-		}
-	})
-}
-
-// Example: With fields for structured logging
-func TestWithFields(t *testing.T) {
-	err := trace.NotFound("user not found")
-	err = trace.WithFields(err, map[string]any{
-		"user_id":    "abc123",
-		"request_id": "req-456",
-	})
-
-	fields := trace.GetFields(err)
-	if fields["user_id"] != "abc123" {
-		t.Error("field not preserved")
-	}
-}
-
-// Example: slog integration
-func TestSlogIntegration(t *testing.T) {
-	var buf strings.Builder
-	logger := slog.New(slog.NewJSONHandler(&buf, nil))
-
-	err := trace.Wrap(errors.New("db error"), "failed to fetch user")
-	err = trace.WithField(err, "user_id", "123")
-
-	logger.Error("operation failed", trace.SlogError(err))
-
-	output := buf.String()
-	if !strings.Contains(output, "db error") {
-		t.Error("log should contain error message")
-	}
-}
-
-// Example: Aggregate errors (Go 1.20+)
-func TestAggregateErrors(t *testing.T) {
-	err1 := trace.NotFound("user not found")
-	err2 := trace.BadParameter("invalid email")
-	err3 := trace.AccessDenied("no permission")
-
-	combined := trace.Aggregate(err1, err2, err3)
-
-	// Should match all error types
-	if !trace.IsNotFound(combined) {
-		t.Error("should match NotFound")
-	}
-	if !trace.IsBadParameter(combined) {
-		t.Error("should match BadParameter")
-	}
-	if !trace.IsAccessDenied(combined) {
-		t.Error("should match AccessDenied")
-	}
-}
-
-// Example: Context integration
-func TestContextIntegration(t *testing.T) {
-	ctx := context.Background()
-	ctx = trace.ContextWithTraceID(ctx, "trace-123")
-	ctx = trace.ContextWithField(ctx, "user_id", "user-456")
-
-	err := trace.WrapContext(ctx, errors.New("db error"), "query failed")
-
-	fields := trace.GetFields(err)
-	if fields["trace_id"] != "trace-123" {
-		t.Error("trace_id not preserved")
-	}
-	if fields["user_id"] != "user-456" {
-		t.Error("user_id not preserved")
-	}
-}
-
-// Example: Context cancellation
-func TestContextCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	err := trace.FromContext(ctx)
-	if !trace.IsCanceled(err) {
-		t.Error("should be canceled error")
-	}
-}
-
-// Example: Result type (generic)
-func TestResultType(t *testing.T) {
-	// Success case
-	result := trace.Ok(42)
-	if !result.IsOk() {
-		t.Error("should be ok")
-	}
-	if result.Unwrap() != 42 {
-		t.Error("value mismatch")
-	}
-
-	// Error case
-	errResult := trace.Err[int](errors.New("failed"))
-	if !errResult.IsErr() {
-		t.Error("should be error")
-	}
-	if errResult.UnwrapOr(0) != 0 {
-		t.Error("should return default")
-	}
-}
-
-// Example: Try function
-func TestTry(t *testing.T) {
-	// Simulating a function that returns (value, error)
-	getValue := func(success bool) (string, error) {
-		if success {
-			return "hello", nil
-		}
-		return "", errors.New("failed")
-	}
-
-	// Success
-	result := trace.Try(getValue(true))
-	if v, err := result.Value(); err != nil || v != "hello" {
-		t.Error("try should succeed")
-	}
-
-	// Failure
-	result = trace.Try(getValue(false))
-	if result.IsOk() {
-		t.Error("try should fail")
-	}
-}
-
-// Example: Pipeline
-func TestPipeline(t *testing.T) {
-	result, err := trace.NewPipeline(10).
-		Then(func(n int) (int, error) {
-			return n * 2, nil
-		}).
-		Then(func(n int) (int, error) {
-			return n + 5, nil
-		}).
-		Result()
-
+	entries, err := os.ReadDir(".")
 	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-	if result != 25 {
-		t.Errorf("expected 25, got %d", result)
-	}
-}
-
-// Example: Pipeline with error
-func TestPipelineWithError(t *testing.T) {
-	_, err := trace.NewPipeline(10).
-		Then(func(n int) (int, error) {
-			return 0, errors.New("step 1 failed")
-		}).
-		Then(func(n int) (int, error) {
-			// This should not execute
-			t.Error("should not reach here")
-			return n, nil
-		}).
-		Result()
-
-	if err == nil {
-		t.Error("expected error")
-	}
-}
-
-// Example: Debug report
-func TestDebugReport(t *testing.T) {
-	err := deepError()
-	report := trace.DebugReport(err)
-
-	if !strings.Contains(report, "Error Report") {
-		t.Error("should contain header")
-	}
-	if !strings.Contains(report, "TraceError") {
-		t.Error("should contain type info")
-	}
-}
-
-func deepError() error {
-	return level1()
-}
-
-func level1() error {
-	return trace.Wrap(level2(), "level 1")
-}
-
-func level2() error {
-	return trace.Wrap(level3(), "level 2")
-}
-
-func level3() error {
-	return trace.Wrap(errors.New("root cause"), "level 3")
-}
-
-// Example: Error message with arrow-style newlines
-func TestErrorMessageArrowFormat(t *testing.T) {
-	// Create a layered error
-	rootErr := errors.New("sql: no rows in result set")
-	repoErr := trace.Wrap(rootErr, "user 123 not found in database")
-	serviceErr := trace.Wrap(repoErr, "service: failed to get user 123")
-
-	// Error message should be formatted with arrows and newlines
-	errMsg := serviceErr.Error()
-
-	// Should contain newlines
-	if !strings.Contains(errMsg, "\n") {
-		t.Errorf("error message should contain newlines, got: %s", errMsg)
+		t.Fatal(err)
 	}
 
-	// Should contain arrow separator
-	if !strings.Contains(errMsg, "→") {
-		t.Errorf("error message should contain arrow (→), got: %s", errMsg)
-	}
+	fset := token.NewFileSet()
+	names := []string{}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
 
-	// Verify the format: each layer on its own line
-	lines := strings.Split(errMsg, "\n")
-	// At minimum, we should have 3 lines (service, repo, root)
-	if len(lines) < 3 {
-		t.Errorf("expected at least 3 lines, got %d: %s", len(lines), errMsg)
-	}
-}
-
-// Example: User-friendly message
-func TestUserMessage(t *testing.T) {
-	err := trace.Wrap(
-		trace.Wrap(errors.New("SQLSTATE 23505"), "database error"),
-		"failed to create user",
-	)
-
-	msg := trace.UserMessage(err)
-	if msg != "failed to create user" {
-		t.Errorf("unexpected message: %s", msg)
-	}
-}
-
-// Example: Real-world usage pattern
-func TestRealWorldUsage(t *testing.T) {
-	// Simulate a layered application
-	userID := "nonexistent"
-
-	err := handleGetUser(userID)
-
-	// Handler can check error type and respond appropriately
-	if trace.IsNotFound(err) {
-		// Return 404 to client
-		t.Log("User not found - returning 404")
-	}
-
-	// For logging, get full trace
-	t.Logf("Debug report:\n%s", trace.DebugReport(err))
-}
-
-func handleGetUser(userID string) error {
-	user, err := serviceGetUser(userID)
-	if err != nil {
-		return trace.Wrap(err, "handler: get user failed")
-	}
-	_ = user
-	return nil
-}
-
-func serviceGetUser(userID string) (*User, error) {
-	user, err := repoFindUser(userID)
-	if err != nil {
-		return nil, trace.Wrapf(err, "service: failed to get user %s", userID)
-	}
-	return user, nil
-}
-
-func repoFindUser(userID string) (*User, error) {
-	// Simulate database query
-	err := sql.ErrNoRows
-	if err == sql.ErrNoRows {
-		return nil, trace.WrapNotFound(err, fmt.Sprintf("user %s not found in database", userID))
-	}
-	return &User{ID: userID}, nil
-}
-
-type User struct {
-	ID string
-}
-
-// Example output
-func ExampleWrap() {
-	err := errors.New("connection refused")
-	wrapped := trace.Wrap(err, "failed to connect to database")
-	fmt.Println(wrapped)
-}
-
-func ExampleNotFound() {
-	err := trace.NotFound(fmt.Sprintf("user %s not found", "alice"))
-	if trace.IsNotFound(err) {
-		fmt.Println("User not found!")
-	}
-	// Output: User not found!
-}
-
-func ExampleResult() {
-	result := trace.Try(os.Open("nonexistent.txt"))
-	value := result.UnwrapOr(nil)
-	if value == nil {
-		fmt.Println("File not found, using default")
-	}
-	// Output: File not found, using default
-}
-
-// P1: slog JSON schema — trace should serialize as []map[string]any
-func TestSlogTraceJSONSchema(t *testing.T) {
-	var buf strings.Builder
-	logger := slog.New(slog.NewJSONHandler(&buf, nil))
-
-	err := trace.Wrap(errors.New("db error"), "query failed")
-	err = trace.WithField(err, "user_id", "u1")
-	logger.Error("op failed", trace.SlogError(err))
-
-	var parsed map[string]any
-	if e := json.Unmarshal([]byte(buf.String()), &parsed); e != nil {
-		t.Fatalf("invalid JSON: %v", e)
-	}
-
-	errObj, ok := parsed["error"].(map[string]any)
-	if !ok {
-		t.Fatal("missing error object")
-	}
-
-	if errObj["message"] != "query failed" {
-		t.Errorf("unexpected message: %v", errObj["message"])
-	}
-	if errObj["cause"] != "db error" {
-		t.Errorf("unexpected cause: %v", errObj["cause"])
-	}
-
-	traceArr, ok := errObj["trace"].([]any)
-	if !ok || len(traceArr) == 0 {
-		t.Fatal("trace should be a non-empty array")
-	}
-	frame0, ok := traceArr[0].(map[string]any)
-	if !ok {
-		t.Fatal("trace element should be an object")
-	}
-	for _, key := range []string{"file", "line", "func"} {
-		if _, exists := frame0[key]; !exists {
-			t.Errorf("trace frame missing key %q", key)
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range file.Decls {
+			switch decl := decl.(type) {
+			case *ast.FuncDecl:
+				if decl.Recv == nil && decl.Name.IsExported() {
+					names = append(names, decl.Name.Name)
+				}
+			case *ast.GenDecl:
+				for _, spec := range decl.Specs {
+					switch spec := spec.(type) {
+					case *ast.TypeSpec:
+						if spec.Name.IsExported() {
+							names = append(names, spec.Name.Name)
+						}
+					case *ast.ValueSpec:
+						for _, name := range spec.Names {
+							if name.IsExported() {
+								names = append(names, name.Name)
+							}
+						}
+					}
+				}
+			}
 		}
 	}
 
-	fieldsObj, ok := errObj["fields"].(map[string]any)
-	if !ok {
-		t.Fatal("fields should be an object")
-	}
-	if fieldsObj["user_id"] != "u1" {
-		t.Errorf("field user_id not found: %v", fieldsObj)
-	}
+	slices.Sort(names)
+	return names
 }
 
-// P2: WithField/WithFields preserves typed wrapper
-func TestWithFieldPreservesTypedWrapper(t *testing.T) {
-	err := trace.NotFound("user not found")
-	err = trace.WithField(err, "user_id", "abc")
-	err = trace.WithFields(err, map[string]any{"tenant": "t1"})
+func assertPlainFormat(t *testing.T, err error, want string) {
+	t.Helper()
 
-	if !trace.IsNotFound(err) {
-		t.Error("should still be NotFound after WithField/WithFields")
+	formats := map[string]string{
+		"Error": err.Error(),
+		"%s":    fmt.Sprintf("%s", err),
+		"%v":    fmt.Sprintf("%v", err),
 	}
-
-	fields := trace.GetFields(err)
-	if fields["user_id"] != "abc" {
-		t.Error("user_id field missing")
-	}
-	if fields["tenant"] != "t1" {
-		t.Error("tenant field missing")
-	}
-}
-
-// P3: WrapNotFound preserves existing frames from inner TraceError
-func TestWrapTypedPreservesFrames(t *testing.T) {
-	inner := trace.Wrap(errors.New("root"), "inner layer")
-	innerFrames := trace.GetFrames(inner)
-
-	wrapped := trace.WrapNotFound(inner, "not found")
-	wrappedFrames := trace.GetFrames(wrapped)
-
-	if len(wrappedFrames) < len(innerFrames)+1 {
-		t.Errorf("WrapNotFound should accumulate frames: got %d, inner had %d", len(wrappedFrames), len(innerFrames))
-	}
-
-	if !trace.IsNotFound(wrapped) {
-		t.Error("should be NotFound")
-	}
-}
-
-// P3: WrapNotFound preserves existing fields from inner TraceError
-func TestWrapTypedPreservesFields(t *testing.T) {
-	inner := trace.Wrap(errors.New("root"), "inner")
-	inner = trace.WithField(inner, "key1", "val1")
-
-	wrapped := trace.WrapNotFound(inner, "not found")
-	fields := trace.GetFields(wrapped)
-
-	if fields["key1"] != "val1" {
-		t.Errorf("WrapNotFound should preserve inner fields, got: %v", fields)
-	}
-}
-
-// P4: DebugReport walks AggregateError children
-func TestDebugReportAggregateError(t *testing.T) {
-	err1 := trace.NotFound("item 1 missing")
-	err2 := trace.BadParameter("invalid input")
-	agg := trace.Aggregate(err1, err2)
-
-	report := trace.DebugReport(agg)
-
-	if !strings.Contains(report, "item 1 missing") {
-		t.Error("report should contain first child message")
-	}
-	if !strings.Contains(report, "invalid input") {
-		t.Error("report should contain second child message")
-	}
-	if !strings.Contains(report, "AggregateError") {
-		t.Error("report should contain AggregateError type")
-	}
-}
-
-// P5: ConnectionProblem(nil) returns nil
-func TestConnectionProblemNilGuard(t *testing.T) {
-	if err := trace.ConnectionProblem(nil, "should be nil"); err != nil {
-		t.Errorf("ConnectionProblem(nil) should return nil, got: %v", err)
-	}
-}
-
-// P5: Timeout(nil) returns nil
-func TestTimeoutNilGuard(t *testing.T) {
-	if err := trace.Timeout(nil, "should be nil"); err != nil {
-		t.Errorf("Timeout(nil) should return nil, got: %v", err)
-	}
-}
-
-func TestCollectAllOk(t *testing.T) {
-	r := trace.Collect(trace.Ok(1), trace.Ok(2), trace.Ok(3))
-	if r.IsErr() {
-		t.Fatal("expected Ok")
-	}
-	vals := r.Unwrap()
-	if len(vals) != 3 || vals[0] != 1 || vals[1] != 2 || vals[2] != 3 {
-		t.Errorf("unexpected values: %v", vals)
-	}
-}
-
-func TestCollectWithErrors(t *testing.T) {
-	r := trace.Collect(
-		trace.Ok(1),
-		trace.Err[int](errors.New("fail1")),
-		trace.Err[int](errors.New("fail2")),
-	)
-	if r.IsOk() {
-		t.Fatal("expected Err")
-	}
-	errStr := r.Error().Error()
-	if !strings.Contains(errStr, "fail1") || !strings.Contains(errStr, "fail2") {
-		t.Errorf("aggregate should contain both errors: %s", errStr)
-	}
-}
-
-func TestMapErr(t *testing.T) {
-	r := trace.Err[int](errors.New("original"))
-	mapped := trace.MapErr(r, func(err error) error {
-		return fmt.Errorf("wrapped: %w", err)
-	})
-	if mapped.IsOk() {
-		t.Fatal("expected Err")
-	}
-	if !strings.Contains(mapped.Error().Error(), "wrapped") {
-		t.Errorf("error should be mapped: %v", mapped.Error())
-	}
-}
-
-func TestMapErrOnOk(t *testing.T) {
-	r := trace.Ok(42)
-	mapped := trace.MapErr(r, func(err error) error {
-		return fmt.Errorf("should not be called")
-	})
-	if !mapped.IsOk() || mapped.Unwrap() != 42 {
-		t.Error("MapErr on Ok should pass through")
-	}
-}
-
-func TestErrMsg(t *testing.T) {
-	r := trace.ErrMsg[string]("something failed")
-	if r.IsOk() {
-		t.Fatal("expected Err")
-	}
-	if !strings.Contains(r.Error().Error(), "something failed") {
-		t.Errorf("unexpected error: %v", r.Error())
-	}
-}
-
-func TestFlatMap(t *testing.T) {
-	r := trace.Ok(10)
-	result := trace.FlatMap(r, func(v int) trace.Result[string] {
-		return trace.Ok(fmt.Sprintf("val=%d", v))
-	})
-	if !result.IsOk() || result.Unwrap() != "val=10" {
-		t.Errorf("unexpected result: %v", result)
-	}
-}
-
-func TestFlatMapPropagatesError(t *testing.T) {
-	r := trace.Err[int](errors.New("initial"))
-	result := trace.FlatMap(r, func(v int) trace.Result[string] {
-		t.Fatal("should not be called")
-		return trace.Ok("")
-	})
-	if result.IsOk() {
-		t.Error("FlatMap should propagate error")
-	}
-}
-
-func TestPipelineThenDo(t *testing.T) {
-	var sideEffect int
-	result, err := trace.NewPipeline(5).
-		ThenDo(func(v int) error {
-			sideEffect = v * 10
-			return nil
-		}).
-		Result()
-
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-	if result != 5 {
-		t.Errorf("ThenDo should not modify value, got %d", result)
-	}
-	if sideEffect != 50 {
-		t.Errorf("side effect not executed, got %d", sideEffect)
-	}
-}
-
-func TestPipelineThenDoError(t *testing.T) {
-	_, err := trace.NewPipeline(5).
-		ThenDo(func(v int) error {
-			return errors.New("side effect failed")
-		}).
-		Then(func(v int) (int, error) {
-			t.Fatal("should not execute after ThenDo error")
-			return v, nil
-		}).
-		Result()
-
-	if err == nil {
-		t.Error("expected error from ThenDo")
-	}
-}
-
-func TestPipelineRecover(t *testing.T) {
-	result, err := trace.NewPipeline(0).
-		Then(func(v int) (int, error) {
-			return 0, errors.New("oops")
-		}).
-		Recover(func(err error) (int, error) {
-			return 99, nil
-		}).
-		Result()
-
-	if err != nil {
-		t.Errorf("expected recovery, got error: %v", err)
-	}
-	if result != 99 {
-		t.Errorf("expected 99, got %d", result)
-	}
-}
-
-func TestPipelineRecoverWith(t *testing.T) {
-	result, err := trace.NewPipeline(0).
-		Then(func(v int) (int, error) {
-			return 0, errors.New("oops")
-		}).
-		RecoverWith(42).
-		Result()
-
-	if err != nil {
-		t.Errorf("expected recovery, got error: %v", err)
-	}
-	if result != 42 {
-		t.Errorf("expected 42, got %d", result)
-	}
-}
-
-func TestPipelineRecoverWithNoError(t *testing.T) {
-	result, err := trace.NewPipeline(10).
-		RecoverWith(42).
-		Result()
-
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-	if result != 10 {
-		t.Errorf("RecoverWith should not change value when no error, got %d", result)
-	}
-}
-
-func TestTransformPipeline(t *testing.T) {
-	p := trace.NewPipeline(42)
-	result := trace.TransformPipeline(p, func(v int) (string, error) {
-		return fmt.Sprintf("num=%d", v), nil
-	})
-
-	val, err := result.Result()
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-	if val != "num=42" {
-		t.Errorf("expected 'num=42', got %q", val)
-	}
-}
-
-func TestTransformPipelinePropagatesError(t *testing.T) {
-	p := trace.NewPipeline(0).Then(func(v int) (int, error) {
-		return 0, errors.New("upstream fail")
-	})
-
-	result := trace.TransformPipeline(p, func(v int) (string, error) {
-		t.Fatal("should not be called")
-		return "", nil
-	})
-
-	_, err := result.Result()
-	if err == nil {
-		t.Error("expected error propagation")
-	}
-}
-
-// F1: context.Cause preserves cancellation cause
-func TestFromContextWithCancelCause(t *testing.T) {
-	causeErr := errors.New("shutdown requested")
-	ctx, cancel := context.WithCancelCause(context.Background())
-	cancel(causeErr)
-
-	err := trace.FromContext(ctx)
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !trace.IsCanceled(err) {
-		t.Error("should be canceled")
-	}
-	if !strings.Contains(err.Error(), "shutdown requested") {
-		t.Errorf("cause should be preserved, got: %s", err.Error())
-	}
-}
-
-func TestFromContextWithCancelCauseNilFallback(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	err := trace.FromContext(ctx)
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !trace.IsCanceled(err) {
-		t.Error("should be canceled")
-	}
-	if !strings.Contains(err.Error(), "context canceled") {
-		t.Errorf("should fall back to ctx.Err(), got: %s", err.Error())
-	}
-}
-
-// F2: Errors iterator
-func TestErrorsIteratorSingleChain(t *testing.T) {
-	root := errors.New("root")
-	wrapped := trace.Wrap(root, "layer1")
-	wrapped = trace.Wrap(wrapped, "layer2")
-
-	var count int
-	for range trace.Errors(wrapped) {
-		count++
-	}
-	if count < 3 {
-		t.Errorf("expected at least 3 errors in chain, got %d", count)
-	}
-}
-
-func TestErrorsIteratorAggregate(t *testing.T) {
-	err1 := trace.NotFound("a")
-	err2 := trace.BadParameter("b")
-	agg := trace.Aggregate(err1, err2)
-
-	var messages []string
-	for e := range trace.Errors(agg) {
-		messages = append(messages, e.Error())
-	}
-	found := strings.Join(messages, " | ")
-	if !strings.Contains(found, "a") || !strings.Contains(found, "b") {
-		t.Errorf("should traverse all children, got: %s", found)
-	}
-}
-
-func TestErrorsIteratorNil(t *testing.T) {
-	var count int
-	for range trace.Errors(nil) {
-		count++
-	}
-	if count != 0 {
-		t.Error("nil error should yield nothing")
-	}
-}
-
-func TestErrorsIteratorEarlyBreak(t *testing.T) {
-	root := errors.New("root")
-	wrapped := trace.Wrap(root, "l1")
-	wrapped = trace.Wrap(wrapped, "l2")
-
-	var count int
-	for range trace.Errors(wrapped) {
-		count++
-		if count == 1 {
-			break
+	for name, got := range formats {
+		if got != want {
+			t.Fatalf("%s = %q, want %q", name, got, want)
+		}
+		if strings.Contains(got, ".go") || strings.Contains(got, "Test") {
+			t.Fatalf("%s leaked debug location in %q", name, got)
 		}
 	}
-	if count != 1 {
-		t.Error("early break should stop iteration")
-	}
 }
 
-// F3: DetachedContext
-func TestDetachedContext(t *testing.T) {
-	parent := context.Background()
-	parent = trace.ContextWithTraceID(parent, "trace-abc")
-	parent = trace.ContextWithField(parent, "env", "test")
+func assertDebugContainsInOrder(t *testing.T, err error, wants ...string) {
+	t.Helper()
 
-	detached := trace.DetachedContext(parent)
-
-	if trace.TraceIDFromContext(detached) != "trace-abc" {
-		t.Error("detached context should preserve values")
-	}
-	fields := trace.FieldsFromContext(detached)
-	if fields["env"] != "test" {
-		t.Error("detached context should preserve fields")
-	}
-}
-
-func TestDetachedContextNotCanceled(t *testing.T) {
-	parent, cancel := context.WithCancel(context.Background())
-	detached := trace.DetachedContext(parent)
-	cancel()
-
-	select {
-	case <-detached.Done():
-		t.Error("detached context should NOT be canceled when parent is canceled")
-	default:
-	}
-}
-
-// F4: OnCancel
-func TestOnCancel(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	c := trace.NewContextualizer(ctx)
-
-	called := make(chan struct{})
-	c.OnCancel(func() {
-		close(called)
-	})
-
-	cancel()
-
-	select {
-	case <-called:
-	case <-time.After(time.Second):
-		t.Error("OnCancel callback should have been called")
-	}
-}
-
-func TestOnCancelStop(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	c := trace.NewContextualizer(ctx)
-
-	var called bool
-	stop := c.OnCancel(func() {
-		called = true
-	})
-
-	if !stop() {
-		t.Error("stop should return true before cancellation")
-	}
-
-	cancel()
-	time.Sleep(50 * time.Millisecond)
-
-	if called {
-		t.Error("callback should not run after stop()")
-	}
-}
-
-// F5: WithCancelCause / WithTimeoutCause
-func TestWithCancelCause(t *testing.T) {
-	cause := errors.New("manual shutdown")
-	ctx, cancel := trace.WithCancelCause(context.Background())
-	cancel(cause)
-
-	<-ctx.Done()
-	if context.Cause(ctx) != cause {
-		t.Errorf("expected cause %v, got %v", cause, context.Cause(ctx))
-	}
-}
-
-func TestWithTimeoutCause(t *testing.T) {
-	cause := errors.New("slow query")
-	ctx, cancel := trace.WithTimeoutCause(context.Background(), 10*time.Millisecond, cause)
-	defer cancel()
-
-	<-ctx.Done()
-	if context.Cause(ctx) != cause {
-		t.Errorf("expected cause %v, got %v", cause, context.Cause(ctx))
-	}
-}
-
-// F6: NewErrorHandler nil fallback uses DiscardHandler
-func TestNewErrorHandlerNilUsesDiscard(t *testing.T) {
-	h := trace.NewErrorHandler(nil)
-	if h == nil {
-		t.Fatal("should return non-nil handler")
-	}
-	if !h.Enabled(context.Background(), slog.LevelError) {
-	}
-
-	err := h.Handle(context.Background(), slog.NewRecord(
-		time.Now(), slog.LevelError, "test", 0,
-	))
-	if err != nil {
-		t.Errorf("DiscardHandler should not error: %v", err)
-	}
-}
-
-// F1+F5 integration: WithCancelCause + FromContext preserves cause
-func TestFromContextWithTimeoutCause(t *testing.T) {
-	cause := errors.New("db timeout")
-	ctx, cancel := trace.WithTimeoutCause(context.Background(), 10*time.Millisecond, cause)
-	defer cancel()
-
-	<-ctx.Done()
-	err := trace.FromContext(ctx)
-
-	if !trace.IsTimeout(err) && !trace.IsCanceled(err) {
-		t.Error("should be timeout or canceled")
-	}
-	if !strings.Contains(err.Error(), "db timeout") {
-		t.Errorf("cause should be preserved, got: %s", err.Error())
+	debug := fmt.Sprintf("%+v", err)
+	offset := 0
+	for _, want := range wants {
+		index := strings.Index(debug[offset:], want)
+		if index < 0 {
+			t.Fatalf("debug output missing %q after offset %d:\n%s", want, offset, debug)
+		}
+		offset += index + len(want)
 	}
 }
